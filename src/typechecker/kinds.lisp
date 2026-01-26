@@ -38,6 +38,10 @@
    #:kfun-p                             ; FUNCTION
    #:kstar-p                            ; FUNCTION
    #:kunify-error                       ; CONDITION
+   #:krow                               ; STRUCT
+   #:make-krow                          ; CONSTRUCTOR
+   #:krow-p                             ; FUNCTION
+   #:+krow+                             ; CONSTANT
    ))
 
 (in-package #:coalton-impl/typechecker/kinds)
@@ -70,8 +74,14 @@
   (from (util:required 'from) :type kind :read-only t)
   (to   (util:required 'to)   :type kind :read-only t))
 
-(defstruct (kyvar (:include kind)) 
+(defstruct (kyvar (:include kind))
   (id (util:required 'id) :type fixnum :read-only t))
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defstruct (krow (:include kind)
+                    (:copier nil))))
+
+(alexandria:define-constant +krow+ (make-krow) :test #'equalp)
 
 (defun kyvar-list-p (x)
   (and (alexandria:proper-list-p x)

@@ -20,6 +20,8 @@
    #:make-qualified-ty                  ; CONSTRUCTOR
    #:qualified-ty-predicates            ; ACCESSOR
    #:qualified-ty-type                  ; ACCESSOR
+   #:qualified-ty-effects               ; ACCESSOR
+   #:qualified-ty-p                     ; FUNCTION
    #:qualified-ty=                      ; FUNCTION
    #:qualified-ty-list                  ; TYPE
    #:remove-source-info                 ; FUNCTION
@@ -72,7 +74,8 @@
 
 (defstruct qualified-ty
   (predicates (util:required 'predicates) :type ty-predicate-list :read-only t)
-  (type       (util:required 'type)       :type ty                :read-only t))
+  (type       (util:required 'type)       :type ty                :read-only t)
+  (effects    (make-ty-row-empty)          :type ty                :read-only t))
 
 (defun qualified-ty= (qualified-ty1 qualified-ty2)
   (and (every #'type-predicate=
@@ -94,14 +97,14 @@
 (deftype qualified-ty-list ()
   '(satisfies qualified-ty-list-p))
 
-(defun qualify (predicates type)
+(defun qualify (predicates type &optional effects)
   "Qualify TYPE with PREDICATES"
-  (declare (type ty type)
-           (type ty-predicate-list predicates)
+  (declare (type (or null ty) effects)
            (values qualified-ty &optional))
   (make-qualified-ty
    :predicates predicates
-   :type type))
+   :type type
+   :effects (or effects (make-ty-row-empty))))
 
 (defgeneric remove-source-info (ty)
   (:method ((pred ty-predicate))
