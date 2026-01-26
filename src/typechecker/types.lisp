@@ -65,10 +65,23 @@
    #:type-variables                     ; FUNCTION
    #:next-pprint-variable               ; FUNCTION
    #:next-pprint-variable-as-tvar       ; FUNCTION
-   #:pprint-tvar                        ; FUNCTION
-   #:pprint-ty                          ; FUNCTION
-   #:type-application-error             ; CONDITION
-   ))
+#:pprint-tvar                        ; FUNCTION
+    #:pprint-ty                          ; FUNCTION
+    #:type-application-error             ; CONDITION
+    #:ty-row-empty                       ; STRUCT
+    #:make-ty-row-empty                  ; CONSTRUCTOR
+    #:ty-row-empty-p                     ; FUNCTION
+    #:ty-row-labeled                     ; STRUCT
+    #:make-ty-row-labeled                ; CONSTRUCTOR
+    #:ty-row-labeled-p                    ; FUNCTION
+    #:ty-row-labeled-label               ; ACCESSOR
+    #:ty-row-labeled-type                ; ACCESSOR
+    #:ty-row-labeled-rest                ; ACCESSOR
+    #:ty-row-var                         ; STRUCT
+    #:make-ty-row-var                    ; CONSTRUCTOR
+    #:ty-row-var-p                       ; FUNCTION
+    #:ty-row-var-id                      ; ACCESSOR
+    ))
 
 (in-package #:coalton-impl/typechecker/types)
 
@@ -159,6 +172,16 @@
 
 (defmethod make-load-form ((self tgen) &optional env)
   (make-load-form-saving-slots self :environment env))
+
+(defstruct (ty-row-empty (:include ty)))
+
+(defstruct (ty-row-labeled (:include ty))
+  (label (util:required 'label) :type symbol :read-only t)
+  (type  (util:required 'type)  :type ty     :read-only t)
+  (rest  (util:required 'rest)  :type ty     :read-only t))
+
+(defstruct (ty-row-var (:include ty))
+  (id (util:required 'id) :type fixnum :read-only t))
 
 ;;;
 ;;; Type Variables

@@ -1,0 +1,6 @@
+(define-effect
+  (define unsafe-div (fn (x y) (/ x y))
+  (define safe-div
+    (fn (x y)
+      (catch (/ x y)
+        [DivideByZero _ -> 0])))

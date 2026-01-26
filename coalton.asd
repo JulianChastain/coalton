@@ -335,6 +335,7 @@
                (:file "deriver-tests")
                (:file "file-tests")
                (:file "experimental-tests")
+               (:file "effect-tests")
                (:file "exceptions")
                (:module "monad"
                 :serial t
