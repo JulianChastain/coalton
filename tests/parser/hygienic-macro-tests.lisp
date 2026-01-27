@@ -548,3 +548,204 @@
       ;; 'it' should be an identifier with user-visible scopes
       (is (stx:identifier? it-id))
       (is (eq 'it (stx:identifier-symbol it-id))))))
+
+;;;
+;;; Local Expansion Control Tests (Phase 3)
+;;;
+
+;;; local-expand tests
+
+(deftest local-expand-atom ()
+  "local-expand returns atoms unchanged"
+  (let* ((stx (stx:make-identifier-syntax 'x))
+         (result (macro:local-expand stx)))
+    (is (stx:syntax-object-p result))
+    (is (eq 'x (stx:syntax-e result)))))
+
+(deftest local-expand-non-macro ()
+  "local-expand returns non-macro forms with expanded children"
+  (let* ((ctx (stx:make-syntax-object 'ctx))
+         (stx (stx:datum->syntax ctx '(some-function arg1 arg2)))
+         (result (macro:local-expand stx)))
+    (is (stx:syntax-object-p result))
+    (let ((datum (stx:syntax->datum result)))
+      (is (eq 'some-function (first datum)))
+      (is (eq 'arg1 (second datum)))
+      (is (eq 'arg2 (third datum))))))
+
+(deftest local-expand-expands-macro ()
+  "local-expand expands macros"
+  ;; Use progn which is a CL macro that expands
+  ;; Note: progn might not expand to anything different, so let's use when
+  (let* ((ctx (stx:make-syntax-object 'ctx))
+         (stx (stx:datum->syntax ctx '(when t 42)))
+         (result (macro:local-expand stx)))
+    ;; Should be expanded (when expands to if)
+    (is (stx:syntax-object-p result))
+    (let ((datum (stx:syntax->datum result)))
+      ;; when expands to (if t (progn 42))
+      (is (eq 'if (first datum))))))
+
+(deftest local-expand-stop-list-stops ()
+  "local-expand stops at forms in stop-list"
+  ;; Define a test macro
+  (eval '(defmacro coalton-impl/parser/hygienic-macro-tests::test-macro-outer (&body body)
+           `(progn :outer-expanded ,@body)))
+  (let* ((ctx (stx:make-syntax-object 'ctx))
+         (stx (stx:datum->syntax ctx
+                '(coalton-impl/parser/hygienic-macro-tests::test-macro-outer x)))
+         ;; Stop at our outer macro
+         (result (macro:local-expand stx
+                   '(coalton-impl/parser/hygienic-macro-tests::test-macro-outer))))
+    ;; Should NOT be expanded
+    (let ((datum (stx:syntax->datum result)))
+      (is (eq 'coalton-impl/parser/hygienic-macro-tests::test-macro-outer (first datum))))))
+
+(deftest local-expand-stop-list-children-expanded ()
+  "local-expand expands children of stopped forms"
+  ;; Define test macros
+  (eval '(defmacro coalton-impl/parser/hygienic-macro-tests::outer-stop (&body body)
+           `(progn :outer ,@body)))
+  (eval '(defmacro coalton-impl/parser/hygienic-macro-tests::inner-expand ()
+           ''expanded-value))
+  (let* ((ctx (stx:make-syntax-object 'ctx))
+         (stx (stx:datum->syntax ctx
+                '(coalton-impl/parser/hygienic-macro-tests::outer-stop
+                  (coalton-impl/parser/hygienic-macro-tests::inner-expand))))
+         ;; Stop at outer, but inner should expand
+         (result (macro:local-expand stx
+                   '(coalton-impl/parser/hygienic-macro-tests::outer-stop))))
+    (let ((datum (stx:syntax->datum result)))
+      ;; Outer should not be expanded
+      (is (eq 'coalton-impl/parser/hygienic-macro-tests::outer-stop (first datum)))
+      ;; But inner should be expanded to 'expanded-value
+      (is (equal ''expanded-value (second datum))))))
+
+(deftest local-expand-recursive ()
+  "local-expand recursively expands nested macros"
+  ;; Define nested macros
+  (eval '(defmacro coalton-impl/parser/hygienic-macro-tests::level1 ()
+           '(coalton-impl/parser/hygienic-macro-tests::level2)))
+  (eval '(defmacro coalton-impl/parser/hygienic-macro-tests::level2 ()
+           ':final-value))
+  (let* ((ctx (stx:make-syntax-object 'ctx))
+         (stx (stx:datum->syntax ctx
+                '(coalton-impl/parser/hygienic-macro-tests::level1)))
+         (result (macro:local-expand stx)))
+    (let ((datum (stx:syntax->datum result)))
+      ;; Should be fully expanded to :final-value
+      (is (eq :final-value datum)))))
+
+(deftest local-expand-preserves-scopes ()
+  "local-expand preserves scopes through expansion"
+  (let* ((my-scope (scope:make-scope-token))
+         (scopes (scope:scope-set-add (scope:empty-scope-set) my-scope))
+         (stx (stx:make-syntax-object '(list x y) :scopes scopes))
+         (result (macro:local-expand stx)))
+    ;; Result should still have our scope
+    (is (scope:scope-set-member-p (stx:syntax-object-scopes result) my-scope))))
+
+(deftest local-expand-preserves-source ()
+  "local-expand preserves source info through expansion"
+  (let* ((source (cons 10 20))
+         (stx (stx:make-syntax-object '(list x) :source source))
+         (result (macro:local-expand stx)))
+    ;; Result should preserve source
+    (is (equal source (stx:syntax-object-source result)))))
+
+(deftest local-expand-with-stop-list ()
+  "local-expand stops at specified forms"
+  ;; Define test macros locally in the test package
+  (eval '(defmacro coalton-impl/parser/hygienic-macro-tests::test-outer (&body body)
+           `(progn :outer-expanded ,@body)))
+  (eval '(defmacro coalton-impl/parser/hygienic-macro-tests::test-inner (&body body)
+           `(progn :inner-expanded ,@body)))
+
+  (let* ((ctx (stx:make-syntax-object 'ctx))
+         (stx (stx:datum->syntax ctx
+                '(coalton-impl/parser/hygienic-macro-tests::test-outer
+                  (coalton-impl/parser/hygienic-macro-tests::test-inner x))))
+         ;; Expand outer but stop at 'test-inner
+         (expanded (macro:local-expand stx
+                     '(coalton-impl/parser/hygienic-macro-tests::test-inner))))
+    ;; outer should be expanded (result is a progn form)
+    (let ((datum (stx:syntax->datum expanded)))
+      (is (eq 'progn (first datum)))
+      (is (eq :outer-expanded (second datum)))
+      ;; But (test-inner x) should remain unexpanded
+      (let ((inner-form (find-if (lambda (elem)
+                                   (and (listp elem)
+                                        (eq 'coalton-impl/parser/hygienic-macro-tests::test-inner
+                                            (first elem))))
+                                 datum)))
+        (is (not (null inner-form)))))))
+
+;;; syntax-local-value tests
+
+(deftest syntax-local-value-finds-macro ()
+  "syntax-local-value retrieves macro-function value"
+  ;; 'when' is a standard CL macro
+  (let* ((id (stx:make-identifier-syntax 'when))
+         (value (macro:syntax-local-value id)))
+    ;; Should return the macro function
+    (is (not (null value)))
+    (is (functionp value))))
+
+(deftest syntax-local-value-custom-binding ()
+  "syntax-local-value retrieves custom compile-time binding"
+  (let ((test-sym (gensym "TEST-BINDING-")))
+    ;; Define a custom binding
+    (macro:define-compile-time-value test-sym 'my-custom-value)
+    (unwind-protect
+        (let* ((id (stx:make-identifier-syntax test-sym))
+               (value (macro:syntax-local-value id)))
+          (is (eq 'my-custom-value value)))
+      ;; Cleanup
+      (remhash test-sym macro:*compile-time-bindings*))))
+
+(deftest syntax-local-value-failure-thunk ()
+  "syntax-local-value calls failure thunk when not found"
+  (let* ((nonexistent-sym (gensym "NONEXISTENT-"))
+         (id (stx:make-identifier-syntax nonexistent-sym))
+         (thunk-called nil)
+         (result (macro:syntax-local-value
+                  id
+                  (lambda ()
+                    (setf thunk-called t)
+                    :fallback-value))))
+    (is thunk-called)
+    (is (eq :fallback-value result))))
+
+(deftest syntax-local-value-error-on-missing ()
+  "syntax-local-value errors when no binding and no thunk"
+  (let* ((nonexistent-sym (gensym "NONEXISTENT-"))
+         (id (stx:make-identifier-syntax nonexistent-sym)))
+    (signals error (macro:syntax-local-value id))))
+
+(deftest syntax-local-value-non-identifier-error ()
+  "syntax-local-value errors on non-identifier input"
+  (let ((stx (stx:make-syntax-object '(not an identifier))))
+    (signals error (macro:syntax-local-value stx))))
+
+;;; define-compile-time-value tests
+
+(deftest define-compile-time-value-stores-value ()
+  "define-compile-time-value stores value in binding table"
+  (let ((test-sym (gensym "TEST-")))
+    (unwind-protect
+        (progn
+          (macro:define-compile-time-value test-sym 'stored-value)
+          (is (eq 'stored-value (gethash test-sym macro:*compile-time-bindings*))))
+      ;; Cleanup
+      (remhash test-sym macro:*compile-time-bindings*))))
+
+(deftest define-compile-time-value-overwrites ()
+  "define-compile-time-value overwrites existing binding"
+  (let ((test-sym (gensym "TEST-")))
+    (unwind-protect
+        (progn
+          (macro:define-compile-time-value test-sym 'first-value)
+          (macro:define-compile-time-value test-sym 'second-value)
+          (is (eq 'second-value (gethash test-sym macro:*compile-time-bindings*))))
+      ;; Cleanup
+      (remhash test-sym macro:*compile-time-bindings*))))

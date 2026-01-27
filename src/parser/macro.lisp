@@ -29,9 +29,30 @@
    #:syntax-local-introduce               ; FUNCTION
    #:make-syntax-introducer               ; FUNCTION
    #:expand-macro-hygienic/ctx            ; FUNCTION
+
+   ;; Local Expansion Control (Phase 3)
+   #:local-expand                         ; FUNCTION
+   #:syntax-local-value                   ; FUNCTION
+   #:define-compile-time-value            ; FUNCTION
+   #:*compile-time-bindings*              ; VARIABLE
+   #:+local-expand-max-depth+             ; CONSTANT
    ))
 
 (in-package #:coalton-impl/parser/macro)
+
+;;;
+;;; Global State for Local Expansion Control (Phase 3)
+;;;
+
+(defvar *compile-time-bindings* (make-hash-table :test 'eq)
+  "Compile-time binding table mapping symbols to their transformer values.
+These are custom bindings that can be retrieved with syntax-local-value.")
+
+(defvar *local-expand-depth* 0
+  "Current depth of local-expand recursion.")
+
+(defconstant +local-expand-max-depth+ 1000
+  "Maximum recursion depth for local-expand.")
 
 (defun expand-macro (form source)
   "Expand the macro in FORM using MACROEXPAND-1, trying our best to preserve source information."
@@ -294,6 +315,7 @@ information from the syntax objects where available."
 MACRO-FORM is the raw macro invocation form (a list starting with a macro name).
 Returns a function that takes a syntax object and returns a syntax object."
   (declare (type (or symbol cons) macro-form)
+           (ignore macro-form)
            (values function))
   (lambda (stx)
     (let* ((datum (stx:syntax->datum stx))
@@ -304,7 +326,7 @@ Returns a function that takes a syntax object and returns a syntax object."
   "Expand FORM hygienically, converting between CST and syntax objects.
 
 FORM is a CST representing the macro invocation.
-SOURCE is the source information context.
+SOURCE is the source information context (reserved for future use).
 
 This is the main entry point for hygienic macro expansion in the parser.
 It:
@@ -313,9 +335,117 @@ It:
 3. Expands hygienically using the flip algorithm
 4. Converts the result back to a CST for the parser"
   (declare (type cst:cst form)
+           (ignore source)
            (values cst:cst))
   (let* ((stx (stx-cst:cst->syntax form))
          (transformer (make-cl-macro-transformer (cst:raw form)))
          (expanded-stx (expand-macro-hygienic stx transformer))
          (fallback-source (cst:source form)))
     (syntax->cst expanded-stx fallback-source)))
+
+;;;
+;;; Local Expansion Control (Phase 3)
+;;;
+;;; These functions enable controlled macro expansion for macro-aware code walkers
+;;; and type-directed macros.
+;;;
+
+(defun local-expand (stx &optional (stop-list nil) (context-stx nil))
+  "Expand macros in STX until reaching forms in STOP-LIST.
+
+STX is the syntax object to expand.
+STOP-LIST is a list of symbols naming forms that should not be expanded.
+CONTEXT-STX is optional syntax to inherit source context from.
+
+Returns the partially expanded syntax object. Macros whose names appear
+in STOP-LIST will not be expanded, but their subforms may be.
+
+Example:
+  (local-expand (datum->syntax ctx '(outer (inner x))) '(inner))
+  ;; Expands 'outer' but stops at 'inner'"
+  (declare (type stx:syntax-object stx)
+           (type list stop-list)
+           (ignore context-stx))
+  ;; Check recursion depth
+  (when (>= *local-expand-depth* +local-expand-max-depth+)
+    (error "local-expand: maximum expansion depth exceeded"))
+  (let ((datum (stx:syntax-e stx)))
+    (cond
+      ;; Atom: return as-is
+      ((not (listp datum))
+       stx)
+
+      ;; Empty list: return as-is
+      ((null datum)
+       stx)
+
+      ;; List form: check for macro
+      (t
+       (let* ((head-stx (first datum))
+              ;; Handle both wrapped and unwrapped head elements
+              (head (if (stx:syntax-object-p head-stx)
+                        (stx:syntax-e head-stx)
+                        head-stx)))
+         (flet ((expand-child (sub)
+                  (let ((*local-expand-depth* (1+ *local-expand-depth*)))
+                    (if (stx:syntax-object-p sub)
+                        (local-expand sub stop-list)
+                        ;; Wrap raw datum in syntax object before expanding
+                        (local-expand (stx:make-syntax-object sub
+                                        :scopes (stx:syntax-object-scopes stx)
+                                        :source (stx:syntax-object-source stx))
+                                      stop-list)))))
+           (cond
+             ;; Head is symbol in stop-list: expand children but not this form
+             ((and (symbolp head) (member head stop-list :test #'eq))
+              (stx:make-syntax-object
+               (cons head-stx
+                     (mapcar #'expand-child (rest datum)))
+               :scopes (stx:syntax-object-scopes stx)
+               :source (stx:syntax-object-source stx)
+               :properties (stx:syntax-object-properties stx)))
+
+             ;; Head is macro: expand and recurse
+             ((and (symbolp head) (macro-function head))
+              (let* ((transformer (make-cl-macro-transformer datum))
+                     (expanded (expand-macro-hygienic/ctx stx transformer))
+                     (*local-expand-depth* (1+ *local-expand-depth*)))
+                (local-expand expanded stop-list)))
+
+             ;; Not a macro: recurse on children
+             (t
+              (stx:make-syntax-object
+               (mapcar #'expand-child datum)
+               :scopes (stx:syntax-object-scopes stx)
+               :source (stx:syntax-object-source stx)
+               :properties (stx:syntax-object-properties stx))))))))))
+
+(defun syntax-local-value (id &optional failure-thunk)
+  "Get the compile-time value bound to identifier ID.
+
+ID must be an identifier syntax object.
+FAILURE-THUNK, if provided, is called with no arguments when ID has
+no compile-time binding. If not provided, an error is signaled.
+
+Returns the compile-time value (typically a macro transformer function).
+
+This checks both the custom compile-time bindings table and CL's
+macro-function for the identifier's symbol."
+  (declare (type stx:syntax-object id))
+  (unless (stx:identifier? id)
+    (error "syntax-local-value: expected identifier, got ~S" id))
+  (let* ((sym (stx:identifier-symbol id))
+         (value (or (gethash sym *compile-time-bindings*)
+                    (macro-function sym))))
+    (cond
+      (value value)
+      (failure-thunk (funcall failure-thunk))
+      (t (error "syntax-local-value: no binding for ~S" sym)))))
+
+(defun define-compile-time-value (sym value)
+  "Bind SYM to VALUE in the compile-time binding table.
+
+This allows associating compile-time values with symbols that are not
+CL macros. These values can be retrieved with syntax-local-value."
+  (declare (type symbol sym))
+  (setf (gethash sym *compile-time-bindings*) value))

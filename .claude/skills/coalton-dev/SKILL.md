@@ -19,7 +19,8 @@ This project uses **qlot** for dependency management. All commands should be run
 | Install dependencies | `qlot install` |
 | Check compilation | `qlot exec sbcl --eval "(asdf:load-system :coalton)"` |
 | Run all tests | `qlot exec sbcl --eval "(asdf:test-system :coalton/tests)"` |
-| Run parser tests | See [Running Specific Tests](#running-specific-tests) |
+| **Run parser tests (summary)** | `qlot exec sbcl --noinform --non-interactive --load scripts/run-parser-tests.lisp` |
+| Run parser tests (verbose) | See [Running Specific Tests](#running-specific-tests) |
 | Start REPL | `qlot exec sbcl` |
 | Update dependencies | `qlot update` |
 
@@ -64,7 +65,28 @@ Note: This may fail on the thih-coalton example due to a known issue. Use parser
 
 ## Running Specific Tests
 
-### Parser/Syntax Object Tests
+### Parser Tests with Summary Output (Recommended)
+
+The `scripts/run-parser-tests.lisp` script runs all parser tests and outputs a compact summary showing total tests, passing tests, and names of any failing tests:
+
+```bash
+qlot exec sbcl --noinform --non-interactive --load scripts/run-parser-tests.lisp
+```
+
+Example output:
+```
+========================================
+Parser Test Summary
+========================================
+Total:  237
+Passed: 237
+Failed: 0
+========================================
+```
+
+The script returns exit code 0 on success, 1 on failure.
+
+### Parser/Syntax Object Tests (Verbose)
 
 Load fiasco first, then the test file, then run:
 
@@ -102,6 +124,12 @@ qlot exec sbcl --noinform --non-interactive \
 
 ### Run All Parser Tests Together
 
+**Preferred method** - use the summary script:
+```bash
+qlot exec sbcl --noinform --non-interactive --load scripts/run-parser-tests.lisp
+```
+
+**Verbose method** - shows each test result:
 ```bash
 qlot exec sbcl --noinform --non-interactive \
   --eval "(require :asdf)" \
@@ -155,7 +183,7 @@ src/parser/
 ├── syntax-object.lisp   # Core syntax objects
 ├── binding-table.lisp   # Binding resolution
 ├── syntax-cst.lisp      # CST conversion utilities
-├── macro.lisp           # Hygienic expansion
+├── macro.lisp           # Hygienic expansion (local-expand, syntax-local-value)
 └── syntax-case.lisp     # Pattern matching
 
 tests/parser/
@@ -166,6 +194,9 @@ tests/parser/
 ├── hygienic-macro-tests.lisp
 ├── hygienic-integration-tests.lisp
 └── syntax-case-tests.lisp
+
+scripts/
+└── run-parser-tests.lisp  # Test runner with summary output
 ```
 
 ## Troubleshooting
