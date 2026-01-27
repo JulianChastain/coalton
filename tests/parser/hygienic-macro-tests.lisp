@@ -304,3 +304,247 @@
     (is (stx:syntax-object-p result))
     (is (stx:syntax-object-p (stx-cst:stx-first result)))
     (is (stx:syntax-object-p (stx-cst:stx-first (stx-cst:stx-first result))))))
+
+;;;
+;;; Expansion Context Tests (Phase 2: Intentional Capture)
+;;;
+
+(deftest expansion-context-creation ()
+  "expansion-context holds use-scope and intro-scope"
+  (let* ((use-scope (scope:make-scope-token))
+         (intro-scope (scope:make-scope-token))
+         (ctx (macro::%make-expansion-context use-scope intro-scope)))
+    (is (macro:expansion-context-p ctx))
+    (is (eq use-scope (macro:expansion-context-use-scope ctx)))
+    (is (eq intro-scope (macro:expansion-context-intro-scope ctx)))))
+
+(deftest current-expansion-context-nil-by-default ()
+  "*current-expansion-context* is nil outside expansion"
+  (is (null macro:*current-expansion-context*)))
+
+(deftest expand-macro-hygienic/ctx-binds-context ()
+  "expand-macro-hygienic/ctx binds *current-expansion-context* during transformer"
+  (let* ((input (stx:make-identifier-syntax 'x))
+         (captured-ctx nil)
+         (result (macro:expand-macro-hygienic/ctx
+                  input
+                  (lambda (stx)
+                    (setf captured-ctx macro:*current-expansion-context*)
+                    stx))))
+    (declare (ignore result))
+    ;; Context should have been bound
+    (is (macro:expansion-context-p captured-ctx))
+    ;; But should be unbound now
+    (is (null macro:*current-expansion-context*))))
+
+(deftest expand-macro-hygienic/ctx-context-has-valid-scopes ()
+  "expand-macro-hygienic/ctx provides context with valid scope tokens"
+  (let* ((input (stx:make-identifier-syntax 'x))
+         (use-scope nil)
+         (intro-scope nil)
+         (result (macro:expand-macro-hygienic/ctx
+                  input
+                  (lambda (stx)
+                    (let ((ctx macro:*current-expansion-context*))
+                      (setf use-scope (macro:expansion-context-use-scope ctx))
+                      (setf intro-scope (macro:expansion-context-intro-scope ctx)))
+                    stx))))
+    (declare (ignore result))
+    ;; Both scopes should be scope tokens
+    (is (scope:scope-token-p use-scope))
+    (is (scope:scope-token-p intro-scope))
+    ;; They should be different
+    (is (not (eql (scope:scope-token-id use-scope)
+                  (scope:scope-token-id intro-scope))))))
+
+(deftest syntax-local-introduce-errors-outside-context ()
+  "syntax-local-introduce signals error when not in expansion"
+  (let ((stx (stx:make-identifier-syntax 'x)))
+    (signals error (macro:syntax-local-introduce stx))))
+
+(deftest syntax-local-introduce-flips-intro-scope ()
+  "syntax-local-introduce flips the intro scope on syntax"
+  (let* ((input (stx:make-identifier-syntax 'x))
+         (intro-scope nil)
+         (introduced-before nil)
+         (introduced-after nil)
+         (result (macro:expand-macro-hygienic/ctx
+                  input
+                  (lambda (stx)
+                    (declare (ignore stx))
+                    ;; Create new syntax and introduce it
+                    (let* ((ctx macro:*current-expansion-context*)
+                           (new-id (stx:make-identifier-syntax 'it)))
+                      (setf intro-scope (macro:expansion-context-intro-scope ctx))
+                      (setf introduced-before (stx:syntax-object-scopes new-id))
+                      (let ((introduced (macro:syntax-local-introduce new-id)))
+                        (setf introduced-after (stx:syntax-object-scopes introduced))
+                        introduced))))))
+    (declare (ignore result))
+    ;; Before: should not have intro-scope
+    (is (not (scope:scope-set-member-p introduced-before intro-scope)))
+    ;; After syntax-local-introduce: should have intro-scope (flipped on)
+    (is (scope:scope-set-member-p introduced-after intro-scope))))
+
+(deftest syntax-local-introduce-breaks-hygiene ()
+  "syntax-local-introduce allows intentional hygiene breaking"
+  ;; When we introduce 'it' with syntax-local-introduce:
+  ;; 1. Fresh 'it' created with empty scopes: {}
+  ;; 2. syntax-local-introduce flips intro-scope ON: {intro}
+  ;; 3. After transformer, expand-macro-hygienic/ctx flips intro-scope: {} (removed)
+  ;; 4. expand-macro-hygienic/ctx flips use-scope: {use} (added)
+  ;; Result: 'it' ends up with just {use}, without intro-scope
+  ;;
+  ;; Compare to normal introduced syntax (without syntax-local-introduce):
+  ;; 1. Fresh syntax: {}
+  ;; 2. Flip intro: {intro}
+  ;; 3. Flip use: {intro, use}
+  ;; Result: has intro-scope
+  ;;
+  ;; The key is: syntax-local-introduce removes the intro-scope,
+  ;; making the identifier "visible" to user code bindings.
+  (let* ((input (stx:make-identifier-syntax 'x))
+         (intro-scope nil)
+         (result (macro:expand-macro-hygienic/ctx
+                  input
+                  (lambda (stx)
+                    (declare (ignore stx))
+                    (setf intro-scope (macro:expansion-context-intro-scope
+                                       macro:*current-expansion-context*))
+                    (macro:syntax-local-introduce
+                     (stx:make-identifier-syntax 'it))))))
+    (is (stx:syntax-object-p result))
+    (is (eq 'it (stx:syntax-e result)))
+    ;; Should NOT have intro-scope (that's the key property)
+    (is (not (scope:scope-set-member-p (stx:syntax-object-scopes result) intro-scope)))))
+
+(deftest syntax-local-introduce-vs-normal-introduced ()
+  "Introduced syntax differs based on syntax-local-introduce usage"
+  (let* ((input (stx:make-identifier-syntax 'x))
+         (intro-scope nil)
+         (result (macro:expand-macro-hygienic/ctx
+                  input
+                  (lambda (stx)
+                    (declare (ignore stx))
+                    (setf intro-scope (macro:expansion-context-intro-scope
+                                       macro:*current-expansion-context*))
+                    ;; Return both: one with syntax-local-introduce, one without
+                    (let ((with-introduce (macro:syntax-local-introduce
+                                           (stx:make-identifier-syntax 'visible)))
+                          (without-introduce (stx:make-identifier-syntax 'hidden)))
+                      (stx:make-list-syntax (list with-introduce without-introduce)))))))
+    (let ((visible-scopes (stx:syntax-object-scopes (stx-cst:stx-first result)))
+          (hidden-scopes (stx:syntax-object-scopes (stx-cst:stx-second result))))
+      ;; 'visible' used syntax-local-introduce -> should NOT have intro-scope
+      (is (not (scope:scope-set-member-p visible-scopes intro-scope)))
+      ;; 'hidden' didn't use syntax-local-introduce -> SHOULD have intro-scope
+      (is (scope:scope-set-member-p hidden-scopes intro-scope))
+      ;; They should have different scope sets
+      (is (not (scope:scope-set-equal visible-scopes hidden-scopes))))))
+
+;;;
+;;; make-syntax-introducer Tests
+;;;
+
+(deftest make-syntax-introducer-creates-function ()
+  "make-syntax-introducer returns a function"
+  (let ((introducer (macro:make-syntax-introducer)))
+    (is (functionp introducer))))
+
+(deftest make-syntax-introducer-uses-provided-scope ()
+  "make-syntax-introducer uses the provided scope token"
+  (let* ((my-scope (scope:make-scope-token))
+         (introducer (macro:make-syntax-introducer my-scope))
+         (stx (stx:make-identifier-syntax 'x))
+         (result (funcall introducer stx)))
+    ;; Default mode is :flip, so scope should be added (wasn't there)
+    (is (scope:scope-set-member-p (stx:syntax-object-scopes result) my-scope))))
+
+(deftest make-syntax-introducer-creates-fresh-scope ()
+  "make-syntax-introducer creates fresh scope when none provided"
+  (let* ((introducer1 (macro:make-syntax-introducer))
+         (introducer2 (macro:make-syntax-introducer))
+         (stx (stx:make-identifier-syntax 'x))
+         (result1 (funcall introducer1 stx))
+         (result2 (funcall introducer2 stx)))
+    ;; Each introducer should use a different scope
+    (is (not (scope:scope-set-equal (stx:syntax-object-scopes result1)
+                                    (stx:syntax-object-scopes result2))))))
+
+(deftest make-syntax-introducer-flip-mode ()
+  "make-syntax-introducer :flip mode toggles scope"
+  (let* ((my-scope (scope:make-scope-token))
+         (introducer (macro:make-syntax-introducer my-scope))
+         (stx (stx:make-identifier-syntax 'x)))
+    ;; First flip adds
+    (let ((flipped-once (funcall introducer stx :flip)))
+      (is (scope:scope-set-member-p (stx:syntax-object-scopes flipped-once) my-scope))
+      ;; Second flip removes
+      (let ((flipped-twice (funcall introducer flipped-once :flip)))
+        (is (not (scope:scope-set-member-p (stx:syntax-object-scopes flipped-twice) my-scope)))))))
+
+(deftest make-syntax-introducer-add-mode ()
+  "make-syntax-introducer :add mode always adds scope"
+  (let* ((my-scope (scope:make-scope-token))
+         (introducer (macro:make-syntax-introducer my-scope))
+         (stx (stx:make-identifier-syntax 'x))
+         ;; First add
+         (added-once (funcall introducer stx :add)))
+    (is (scope:scope-set-member-p (stx:syntax-object-scopes added-once) my-scope))
+    ;; Add again - should still have it (idempotent)
+    (let ((added-twice (funcall introducer added-once :add)))
+      (is (scope:scope-set-member-p (stx:syntax-object-scopes added-twice) my-scope)))))
+
+(deftest make-syntax-introducer-remove-mode ()
+  "make-syntax-introducer :remove mode always removes scope"
+  (let* ((my-scope (scope:make-scope-token))
+         (introducer (macro:make-syntax-introducer my-scope))
+         (scopes-with (scope:scope-set-add (scope:empty-scope-set) my-scope))
+         (stx (stx:make-identifier-syntax 'x :scopes scopes-with))
+         (removed (funcall introducer stx :remove)))
+    (is (not (scope:scope-set-member-p (stx:syntax-object-scopes removed) my-scope)))))
+
+;;;
+;;; Anaphoric Macro Simulation Tests
+;;;
+
+(deftest anaphoric-aif-simulation ()
+  "Simulate an anaphoric 'aif' macro using syntax-local-introduce"
+  ;; aif expands (aif test then else) to:
+  ;; (let ((it test)) (if it then else))
+  ;; where 'it' is visible to user code in 'then' and 'else'
+  (let* ((test-stx (stx:make-identifier-syntax 'test-expr))
+         (then-stx (stx:make-identifier-syntax 'then-expr))
+         (else-stx (stx:make-identifier-syntax 'else-expr))
+         (input (stx:make-list-syntax
+                 (list (stx:make-identifier-syntax 'aif)
+                       test-stx
+                       then-stx
+                       else-stx)))
+         (result (macro:expand-macro-hygienic/ctx
+                  input
+                  (lambda (stx)
+                    ;; Extract parts
+                    (let* ((test (stx-cst:stx-second stx))
+                           (then (stx-cst:stx-third stx))
+                           (else (stx-cst:stx-nth 3 stx))
+                           ;; Create 'it' identifier that will be visible to user
+                           (it (macro:syntax-local-introduce
+                                (stx:make-identifier-syntax 'it))))
+                      ;; Build: (let ((it test)) (if it then else))
+                      (stx:datum->syntax stx
+                        `(let ((,it ,(stx:syntax->datum test)))
+                           (if ,it
+                               ,(stx:syntax->datum then)
+                               ,(stx:syntax->datum else)))))))))
+    ;; Result should be a let form
+    (is (stx:syntax-object-p result))
+    (is (eq 'let (stx:syntax-e (stx-cst:stx-first result))))
+    ;; The 'it' binding should have same scopes as the 'then-expr'
+    ;; (both should be "user-visible")
+    (let* ((bindings (stx-cst:stx-second result))
+           (first-binding (stx-cst:stx-first bindings))
+           (it-id (stx-cst:stx-first first-binding)))
+      ;; 'it' should be an identifier with user-visible scopes
+      (is (stx:identifier? it-id))
+      (is (eq 'it (stx:identifier-symbol it-id))))))

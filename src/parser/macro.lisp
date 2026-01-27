@@ -18,7 +18,18 @@
    #:expand-macro-hygienic-wrapper
    #:make-cl-macro-transformer
    #:syntax->cst
-   #:*use-hygienic-macros*))
+   #:*use-hygienic-macros*
+
+   ;; Expansion context (Phase 2: Intentional Capture)
+   #:expansion-context                    ; STRUCT
+   #:expansion-context-p                  ; PREDICATE
+   #:expansion-context-intro-scope        ; ACCESSOR
+   #:expansion-context-use-scope          ; ACCESSOR
+   #:*current-expansion-context*          ; VARIABLE
+   #:syntax-local-introduce               ; FUNCTION
+   #:make-syntax-introducer               ; FUNCTION
+   #:expand-macro-hygienic/ctx            ; FUNCTION
+   ))
 
 (in-package #:coalton-impl/parser/macro)
 
@@ -106,6 +117,101 @@ SEEN-FORMS is a hash table of known forms to prevent hang on cyclical list forms
 (defvar *use-hygienic-macros* nil
   "When T, use hygienic macro expansion. When NIL, use traditional expansion.
 This is a feature flag for gradual rollout.")
+
+;;;
+;;; Expansion Context
+;;;
+;;; The expansion context tracks the scopes created during a single macro
+;;; expansion. This enables intentional capture via syntax-local-introduce.
+;;;
+
+(defstruct (expansion-context
+            (:copier nil)
+            (:constructor %make-expansion-context (use-scope intro-scope)))
+  "Context for a single macro expansion, tracking scopes for hygiene.
+
+USE-SCOPE is the scope added to input syntax before the transformer runs.
+INTRO-SCOPE is the scope flipped on output syntax after the transformer runs."
+  (use-scope   nil :type scope:scope-token :read-only t)
+  (intro-scope nil :type scope:scope-token :read-only t))
+
+(defvar *current-expansion-context* nil
+  "The expansion context for the currently executing macro transformer.
+Bound during calls to the transformer in expand-macro-hygienic/ctx.
+NIL when not inside a macro expansion.")
+
+(defun syntax-local-introduce (stx)
+  "Flip the current expansion's intro scope on STX.
+
+This is the key operation for intentional hygiene breaking. When called
+during macro expansion:
+
+- For syntax introduced by the macro (which will get intro-scope flipped on
+  after the transformer returns), calling syntax-local-introduce pre-flips
+  the scope so the post-flip removes it, making the syntax visible to user code.
+
+- For user-supplied syntax (which won't have intro-scope), calling
+  syntax-local-introduce adds the intro scope, making it invisible to the
+  macro's own bindings.
+
+Example use case - anaphoric 'aif' macro:
+  The macro introduces 'it' bound to the test result. By calling
+  (syntax-local-introduce (make-identifier-syntax 'it)), the 'it' identifier
+  won't get the intro scope after expansion, so user code can reference it.
+
+Signals an error if called outside of a macro expansion context."
+  (declare (type stx:syntax-object stx)
+           (values stx:syntax-object))
+  (unless *current-expansion-context*
+    (error "syntax-local-introduce: not in a macro expansion context"))
+  (stx:stx-flip-scope stx (expansion-context-intro-scope *current-expansion-context*)))
+
+(defun make-syntax-introducer (&optional scope)
+  "Create an introducer function for the given SCOPE.
+
+If SCOPE is NIL, creates a fresh scope token.
+
+Returns a function that takes a syntax object and an optional MODE:
+  :flip (default) - Flip the scope (add if absent, remove if present)
+  :add            - Add the scope unconditionally
+  :remove         - Remove the scope unconditionally
+
+This is useful for creating custom scope manipulations, for example
+to implement definition contexts or module boundaries."
+  (declare (type (or null scope:scope-token) scope)
+           (values function))
+  (let ((scope (or scope (scope:make-scope-token))))
+    (lambda (stx &optional (mode :flip))
+      (declare (type stx:syntax-object stx)
+               (type (member :flip :add :remove) mode))
+      (ecase mode
+        (:flip   (stx:stx-flip-scope stx scope))
+        (:add    (stx:stx-add-scope stx scope))
+        (:remove (stx:stx-remove-scope stx scope))))))
+
+(defun expand-macro-hygienic/ctx (stx transformer)
+  "Expand STX using TRANSFORMER with hygienic scope tracking and context.
+
+Like expand-macro-hygienic, but binds *current-expansion-context* during
+the transformer call, enabling the use of syntax-local-introduce.
+
+The transformer receives a single argument (the scoped input syntax).
+It can call syntax-local-introduce to break hygiene intentionally."
+  (declare (type stx:syntax-object stx)
+           (type function transformer)
+           (values stx:syntax-object))
+  (let* ((use-scope (scope:make-scope-token))
+         (intro-scope (scope:make-scope-token))
+         (ctx (%make-expansion-context use-scope intro-scope))
+         ;; Step 1: Add use-site scope to entire input
+         (input (stx:stx-add-scope stx use-scope))
+         ;; Step 2: Call transformer with context bound
+         (output (let ((*current-expansion-context* ctx))
+                   (funcall transformer input)))
+         ;; Step 3: Flip intro scope on output
+         (result (stx:stx-flip-scope output intro-scope)))
+    ;; Also flip the use-site scope to remove it from passed-through syntax
+    (stx:stx-flip-scope result use-scope)))
 
 (defun expand-macro-hygienic (stx transformer)
   "Expand STX using TRANSFORMER with hygienic scope tracking.

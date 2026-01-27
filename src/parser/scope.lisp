@@ -11,6 +11,7 @@
   (:export
    ;; Scope tokens
    #:scope-token                          ; TYPE
+   #:scope-token-p                        ; PREDICATE
    #:make-scope-token                     ; FUNCTION
    #:scope-token-id                       ; ACCESSOR
 
