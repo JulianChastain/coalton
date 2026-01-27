@@ -47,6 +47,7 @@
                              (:file "syntax-cst")
                              ;; Macro expansion
                              (:file "macro")
+                             (:file "syntax-case")
                              (:file "expression")
                              (:file "toplevel")
                              (:file "collect")
