@@ -285,3 +285,139 @@
          (result (stx:stx-with-property stx 'key 'value)))
     (is (eq 'val (stx:stx-property result 'other)))
     (is (eq 'value (stx:stx-property result 'key)))))
+
+;;;
+;;; Identifier Predicate Tests
+;;;
+
+(deftest identifier?-symbol ()
+  "identifier? returns T for regular symbols"
+  (let ((stx (stx:make-identifier-syntax 'foo)))
+    (is (stx:identifier? stx))))
+
+(deftest identifier?-excludes-keywords ()
+  "identifier? returns NIL for keywords"
+  (let ((stx (stx:make-syntax-object :keyword)))
+    (is (not (stx:identifier? stx)))))
+
+(deftest identifier?-excludes-booleans ()
+  "identifier? returns NIL for t and nil"
+  (let ((true-stx (stx:make-syntax-object t))
+        (nil-stx (stx:make-syntax-object nil)))
+    (is (not (stx:identifier? true-stx)))
+    (is (not (stx:identifier? nil-stx)))))
+
+(deftest identifier?-excludes-non-symbols ()
+  "identifier? returns NIL for non-symbols"
+  (let ((num-stx (stx:make-atom-syntax 42))
+        (str-stx (stx:make-atom-syntax "hello"))
+        (list-stx (stx:make-list-syntax (list (stx:make-identifier-syntax 'a)))))
+    (is (not (stx:identifier? num-stx)))
+    (is (not (stx:identifier? str-stx)))
+    (is (not (stx:identifier? list-stx)))))
+
+(deftest identifier-symbol-extracts ()
+  "identifier-symbol extracts the symbol from an identifier"
+  (let ((stx (stx:make-identifier-syntax 'my-var)))
+    (is (eq 'my-var (stx:identifier-symbol stx)))))
+
+(deftest identifier-symbol-errors-on-non-identifier ()
+  "identifier-symbol signals error for non-identifiers"
+  (let ((num-stx (stx:make-atom-syntax 42)))
+    (signals error (stx:identifier-symbol num-stx))))
+
+;;;
+;;; Identifier Comparison Tests (Phase 1 of Racket Parity)
+;;;
+
+(deftest free-identifier=?-same-symbol-same-scopes ()
+  "free-identifier=? returns T for same symbol and same scopes"
+  (let* ((scope1 (scope:make-scope-token))
+         (scopes (scope:scope-set-add (scope:empty-scope-set) scope1))
+         (id1 (stx:make-identifier-syntax 'x :scopes scopes))
+         (id2 (stx:make-identifier-syntax 'x :scopes scopes)))
+    (is (stx:free-identifier=? id1 id2))))
+
+(deftest free-identifier=?-same-symbol-different-scopes ()
+  "free-identifier=? returns NIL for same symbol but different scopes"
+  (let* ((scope1 (scope:make-scope-token))
+         (scope2 (scope:make-scope-token))
+         (scopes1 (scope:scope-set-add (scope:empty-scope-set) scope1))
+         (scopes2 (scope:scope-set-add (scope:empty-scope-set) scope2))
+         (id1 (stx:make-identifier-syntax 'x :scopes scopes1))
+         (id2 (stx:make-identifier-syntax 'x :scopes scopes2)))
+    (is (not (stx:free-identifier=? id1 id2)))))
+
+(deftest free-identifier=?-different-symbol-same-scopes ()
+  "free-identifier=? returns NIL for different symbols"
+  (let* ((scope1 (scope:make-scope-token))
+         (scopes (scope:scope-set-add (scope:empty-scope-set) scope1))
+         (id1 (stx:make-identifier-syntax 'x :scopes scopes))
+         (id2 (stx:make-identifier-syntax 'y :scopes scopes)))
+    (is (not (stx:free-identifier=? id1 id2)))))
+
+(deftest free-identifier=?-empty-scopes ()
+  "free-identifier=? works with empty scopes"
+  (let ((id1 (stx:make-identifier-syntax 'x))
+        (id2 (stx:make-identifier-syntax 'x)))
+    (is (stx:free-identifier=? id1 id2))))
+
+(deftest free-identifier=?-multiple-scopes ()
+  "free-identifier=? compares full scope sets"
+  (let* ((s1 (scope:make-scope-token))
+         (s2 (scope:make-scope-token))
+         (scopes-both (scope:scope-set-add
+                       (scope:scope-set-add (scope:empty-scope-set) s1)
+                       s2))
+         (scopes-one (scope:scope-set-add (scope:empty-scope-set) s1))
+         (id1 (stx:make-identifier-syntax 'x :scopes scopes-both))
+         (id2 (stx:make-identifier-syntax 'x :scopes scopes-both))
+         (id3 (stx:make-identifier-syntax 'x :scopes scopes-one)))
+    (is (stx:free-identifier=? id1 id2))
+    (is (not (stx:free-identifier=? id1 id3)))))
+
+(deftest free-identifier=?-non-identifiers ()
+  "free-identifier=? returns NIL for non-identifiers"
+  (let ((num (stx:make-atom-syntax 42))
+        (id (stx:make-identifier-syntax 'x)))
+    (is (not (stx:free-identifier=? num id)))
+    (is (not (stx:free-identifier=? id num)))))
+
+(deftest bound-identifier=?-same-as-free ()
+  "bound-identifier=? returns same result as free-identifier=?"
+  (let* ((s1 (scope:make-scope-token))
+         (s2 (scope:make-scope-token))
+         (scopes1 (scope:scope-set-add (scope:empty-scope-set) s1))
+         (scopes2 (scope:scope-set-add (scope:empty-scope-set) s2))
+         (id1 (stx:make-identifier-syntax 'x :scopes scopes1))
+         (id2 (stx:make-identifier-syntax 'x :scopes scopes1))
+         (id3 (stx:make-identifier-syntax 'x :scopes scopes2)))
+    ;; Same scopes -> both return T
+    (is (stx:bound-identifier=? id1 id2))
+    (is (stx:free-identifier=? id1 id2))
+    ;; Different scopes -> both return NIL
+    (is (not (stx:bound-identifier=? id1 id3)))
+    (is (not (stx:free-identifier=? id1 id3)))))
+
+(deftest free-identifier=?-hygiene-scenario ()
+  "Demonstrates hygiene: identifiers before/after macro expansion differ"
+  ;; Simulate: macro expansion adds then flips a scope
+  (let* ((use-scope (scope:make-scope-token))
+         (intro-scope (scope:make-scope-token))
+         ;; User's identifier with no scopes
+         (user-id (stx:make-identifier-syntax 'x))
+         ;; After macro adds use-scope and flips intro-scope on passed-through id
+         (passed-through (stx:stx-flip-scope
+                          (stx:stx-add-scope user-id use-scope)
+                          use-scope))
+         ;; Macro introduces a new 'x - gets intro scope flipped on
+         (introduced (stx:stx-flip-scope
+                      (stx:make-identifier-syntax 'x)
+                      intro-scope)))
+    ;; Passed-through returns to original scopes
+    (is (stx:free-identifier=? user-id passed-through))
+    ;; Introduced has different scopes (intro-scope)
+    (is (not (stx:free-identifier=? user-id introduced)))
+    ;; They have the same symbol but different scope sets
+    (is (eq (stx:identifier-symbol user-id)
+            (stx:identifier-symbol introduced)))))

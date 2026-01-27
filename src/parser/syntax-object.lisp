@@ -43,6 +43,14 @@
    #:make-identifier-syntax               ; FUNCTION
    #:make-atom-syntax                     ; FUNCTION
    #:make-list-syntax                     ; FUNCTION
+
+   ;; Identifier predicates
+   #:identifier?                          ; FUNCTION
+
+   ;; Identifier comparison (Phase 1 of Racket parity)
+   #:free-identifier=?                    ; FUNCTION
+   #:bound-identifier=?                   ; FUNCTION
+   #:identifier-symbol                    ; FUNCTION
    ))
 
 (in-package #:coalton-impl/parser/syntax-object)
@@ -256,3 +264,91 @@ This is the key operation for macro hygiene:
            (type scope:scope-set scopes)
            (values syntax-object))
   (%make-syntax-object elements scopes source nil))
+
+;;;
+;;; Identifier Predicates and Comparison
+;;;
+;;; These operations are fundamental for macros that need to inspect
+;;; or compare identifiers. They form the foundation for pattern matching
+;;; and binding resolution in the hygiene system.
+;;;
+
+(defun identifier? (stx)
+  "Return T if STX is an identifier (syntax object wrapping a symbol).
+
+Excludes keywords and booleans (t, nil) - only regular symbols are identifiers."
+  (declare (type syntax-object stx)
+           (values boolean))
+  (let ((datum (syntax-object-datum stx)))
+    (and (symbolp datum)
+         (not (keywordp datum))
+         (not (eq datum t))
+         (not (eq datum nil)))))
+
+(defun identifier-symbol (stx)
+  "Extract the symbol from an identifier syntax object.
+
+Signals an error if STX is not an identifier."
+  (declare (type syntax-object stx)
+           (values symbol))
+  (unless (identifier? stx)
+    (error "identifier-symbol: expected identifier, got ~S" stx))
+  (syntax-object-datum stx))
+
+(defun free-identifier=? (id1 id2)
+  "Return T if ID1 and ID2 refer to the same free binding.
+
+Two identifiers are free-identifier=? if they have the same symbol name
+AND the same scope sets. This means they would resolve to the same binding
+in any context where both are in scope.
+
+This is the primary comparison for checking if two identifiers refer to
+the same variable, for example when a macro wants to check if an identifier
+matches a keyword like 'else' or 'unquote'.
+
+Example:
+  ;; These are free-identifier=? if they have the same scopes
+  (free-identifier=? (make-identifier-syntax 'x :scopes s1)
+                     (make-identifier-syntax 'x :scopes s1))
+  => T
+
+  ;; Different scopes means different bindings
+  (free-identifier=? (make-identifier-syntax 'x :scopes s1)
+                     (make-identifier-syntax 'x :scopes s2))
+  => NIL"
+  (declare (type syntax-object id1 id2)
+           (values boolean))
+  (and (identifier? id1)
+       (identifier? id2)
+       (eq (syntax-object-datum id1) (syntax-object-datum id2))
+       (scope:scope-set-equal (syntax-object-scopes id1)
+                              (syntax-object-scopes id2))))
+
+(defun bound-identifier=? (id1 id2)
+  "Return T if ID1 and ID2 would create the same binding.
+
+Two identifiers are bound-identifier=? if binding one would shadow
+the other. In the sets-of-scopes model, this occurs when they have
+the same symbol name AND the same scope sets.
+
+This is primarily used for checking if a macro-introduced binding
+would conflict with an existing one, or for implementing binding
+constructs that need to detect duplicate bindings.
+
+In the current implementation, bound-identifier=? is equivalent to
+free-identifier=? because Coalton uses a single namespace. In Racket,
+these can differ due to module imports and rename transformers.
+
+Example:
+  (let ((x 1))
+    (let ((x 2))  ; This x is NOT bound-identifier=? to outer x
+      ...))
+
+  (my-macro x)
+  ;; If macro introduces a binding for 'x', it should be
+  ;; bound-identifier=? to any 'x' it wants to shadow."
+  (declare (type syntax-object id1 id2)
+           (values boolean))
+  ;; In the sets-of-scopes model, bound-identifier=? and free-identifier=?
+  ;; are equivalent: same symbol + same scopes = same binding identity
+  (free-identifier=? id1 id2))
