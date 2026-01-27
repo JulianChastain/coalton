@@ -1,0 +1,33 @@
+# Coalton Dependencies
+# Managed by qlot - https://github.com/fukamachi/qlot
+
+# Core compiler dependencies
+ql alexandria
+ql concrete-syntax-tree
+ql float-features
+ql fset
+ql named-readtables
+ql trivial-gray-streams
+
+# Eclector from GitHub (includes eclector-concrete-syntax-tree system)
+github s-expressionists/Eclector
+
+# Library dependencies
+ql trivial-garbage
+
+# Testing dependencies
+ql fiasco
+
+# Benchmark dependencies
+ql trivial-benchmark
+ql yason
+
+# Documentation dependencies
+ql html-entities
+ql spinneret
+
+# Optional: computable-reals for coalton/library/computable-reals
+ql computable-reals
+
+# Example dependencies (optional - uncomment if needed)
+# ql sdl2
