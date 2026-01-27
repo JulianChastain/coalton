@@ -296,6 +296,7 @@
                              (:file "scope-tests")
                              (:file "syntax-object-tests")
                              (:file "binding-table-tests")
+                             (:file "definition-context-tests")
                              (:file "syntax-cst-tests")
                              (:file "hygienic-macro-tests")
                              (:file "hygienic-integration-tests")

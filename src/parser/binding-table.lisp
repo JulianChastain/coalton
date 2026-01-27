@@ -32,6 +32,7 @@
    ;; Resolution results
    #:resolution-result                    ; TYPE
    #:resolution-unbound                   ; STRUCT
+   #:make-resolution-unbound              ; CONSTRUCTOR
    #:resolution-unbound-p                 ; PREDICATE
    #:resolution-bound                     ; STRUCT
    #:resolution-bound-p                   ; PREDICATE

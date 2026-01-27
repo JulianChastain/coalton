@@ -44,6 +44,7 @@
                              (:file "scope")
                              (:file "syntax-object")
                              (:file "binding-table")
+                             (:file "definition-context")
                              (:file "syntax-cst")
                              ;; Macro expansion
                              (:file "macro")

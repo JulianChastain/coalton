@@ -8,6 +8,7 @@
    #:coalton-impl/parser/scope
    #:coalton-impl/parser/syntax-object
    #:coalton-impl/parser/binding-table
+   #:coalton-impl/parser/definition-context
    #:coalton-impl/parser/syntax-cst
    #:coalton-impl/parser/macro
    ;; Expression and toplevel parsing
