@@ -15,6 +15,8 @@
   (:export
    #:expand-macro
    #:expand-macro-hygienic
+   #:expand-macro-hygienic-wrapper
+   #:make-cl-macro-transformer
    #:syntax->cst
    #:*use-hygienic-macros*))
 
@@ -172,3 +174,42 @@ information from the syntax objects where available."
                                                                  :source first-source))
                                        :rest (convert-list (cdr elements)))))))
          (convert-list datum))))))
+
+;;;
+;;; CL Macro Integration
+;;;
+;;; These functions bridge Common Lisp macros with the hygienic expansion system.
+;;; They allow existing CL macros (including Coalton's) to be expanded hygienically.
+;;;
+
+(defun make-cl-macro-transformer (macro-form)
+  "Create a transformer that calls CL macroexpand-1 on the macro form.
+
+MACRO-FORM is the raw macro invocation form (a list starting with a macro name).
+Returns a function that takes a syntax object and returns a syntax object."
+  (declare (type (or symbol cons) macro-form)
+           (values function))
+  (lambda (stx)
+    (let* ((datum (stx:syntax->datum stx))
+           (expanded (macroexpand-1 datum)))
+      (stx:datum->syntax stx expanded))))
+
+(defun expand-macro-hygienic-wrapper (form source)
+  "Expand FORM hygienically, converting between CST and syntax objects.
+
+FORM is a CST representing the macro invocation.
+SOURCE is the source information context.
+
+This is the main entry point for hygienic macro expansion in the parser.
+It:
+1. Converts the CST to a syntax object
+2. Creates a transformer that calls CL's macroexpand-1
+3. Expands hygienically using the flip algorithm
+4. Converts the result back to a CST for the parser"
+  (declare (type cst:cst form)
+           (values cst:cst))
+  (let* ((stx (stx-cst:cst->syntax form))
+         (transformer (make-cl-macro-transformer (cst:raw form)))
+         (expanded-stx (expand-macro-hygienic stx transformer))
+         (fallback-source (cst:source form)))
+    (syntax->cst expanded-stx fallback-source)))

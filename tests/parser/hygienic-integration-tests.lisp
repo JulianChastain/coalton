@@ -1,0 +1,223 @@
+;;;; Integration tests for hygienic macro expansion in the parser pipeline
+;;;;
+;;;; These tests verify that hygienic macro expansion works correctly when
+;;;; integrated into Coalton's parser, testing end-to-end scenarios with
+;;;; the *use-hygienic-macros* feature flag.
+
+(fiasco:define-test-package #:coalton-impl/parser/hygienic-integration-tests
+  (:use #:cl)
+  (:local-nicknames
+   (#:cst #:concrete-syntax-tree)
+   (#:parser #:coalton-impl/parser)
+   (#:source #:coalton-impl/source)
+   (#:scope #:coalton-impl/parser/scope)
+   (#:stx #:coalton-impl/parser/syntax-object)
+   (#:stx-cst #:coalton-impl/parser/syntax-cst)
+   (#:macro #:coalton-impl/parser/macro)))
+
+(in-package #:coalton-impl/parser/hygienic-integration-tests)
+
+;;;
+;;; Helper Functions
+;;;
+
+(defun parse-form (string fn)
+  "Parse the form in STRING using FN."
+  (let ((source (source:make-source-string string :name "test")))
+    (with-open-stream (stream (source:source-stream source))
+      (parser:with-reader-context stream
+        (funcall fn (parser:maybe-read-form stream parser::*coalton-eclector-client*) source)))))
+
+(defun parse-coalton-expression (string &optional (hygienic nil))
+  "Parse STRING as a Coalton expression.
+When HYGIENIC is true, use hygienic macro expansion."
+  (let ((macro:*use-hygienic-macros* hygienic))
+    (parse-form string
+                (lambda (form source)
+                  (when form
+                    (parser:parse-expression form source))))))
+
+;;;
+;;; Feature Flag Tests
+;;;
+
+(deftest feature-flag-default-is-nil ()
+  "The *use-hygienic-macros* flag defaults to nil"
+  (let ((macro:*use-hygienic-macros* macro:*use-hygienic-macros*))
+    ;; Don't rebind, just check default
+    (is (null macro:*use-hygienic-macros*))))
+
+(deftest feature-flag-can-be-enabled ()
+  "The *use-hygienic-macros* flag can be dynamically bound to t"
+  (let ((macro:*use-hygienic-macros* t))
+    (is macro:*use-hygienic-macros*)))
+
+;;;
+;;; Basic Parsing Tests with Hygienic Flag
+;;;
+
+(deftest parse-simple-expression-traditional ()
+  "Simple expressions parse correctly with traditional expansion"
+  (let ((result (parse-coalton-expression "42" nil)))
+    (is (not (null result)))))
+
+(deftest parse-simple-expression-hygienic ()
+  "Simple expressions parse correctly with hygienic expansion"
+  (let ((result (parse-coalton-expression "42" t)))
+    (is (not (null result)))))
+
+(deftest parse-variable-traditional ()
+  "Variable expressions parse correctly with traditional expansion"
+  (let ((result (parse-coalton-expression "x" nil)))
+    (is (not (null result)))))
+
+(deftest parse-variable-hygienic ()
+  "Variable expressions parse correctly with hygienic expansion"
+  (let ((result (parse-coalton-expression "x" t)))
+    (is (not (null result)))))
+
+(deftest parse-application-traditional ()
+  "Application expressions parse correctly with traditional expansion"
+  (let ((result (parse-coalton-expression "(f x)" nil)))
+    (is (not (null result)))))
+
+(deftest parse-application-hygienic ()
+  "Application expressions parse correctly with hygienic expansion"
+  (let ((result (parse-coalton-expression "(f x)" t)))
+    (is (not (null result)))))
+
+;;;
+;;; Let Binding Tests
+;;;
+
+(deftest parse-let-traditional ()
+  "Let expressions parse correctly with traditional expansion"
+  (let ((result (parse-coalton-expression "(let ((x 1)) x)" nil)))
+    (is (not (null result)))))
+
+(deftest parse-let-hygienic ()
+  "Let expressions parse correctly with hygienic expansion"
+  (let ((result (parse-coalton-expression "(let ((x 1)) x)" t)))
+    (is (not (null result)))))
+
+(deftest parse-nested-let-traditional ()
+  "Nested let expressions parse correctly with traditional expansion"
+  (let ((result (parse-coalton-expression "(let ((x 1)) (let ((y 2)) x))" nil)))
+    (is (not (null result)))))
+
+(deftest parse-nested-let-hygienic ()
+  "Nested let expressions parse correctly with hygienic expansion"
+  (let ((result (parse-coalton-expression "(let ((x 1)) (let ((y 2)) x))" t)))
+    (is (not (null result)))))
+
+;;;
+;;; Lambda/Function Tests
+;;;
+
+(deftest parse-fn-traditional ()
+  "Function expressions parse correctly with traditional expansion"
+  (let ((result (parse-coalton-expression "(fn (x) x)" nil)))
+    (is (not (null result)))))
+
+(deftest parse-fn-hygienic ()
+  "Function expressions parse correctly with hygienic expansion"
+  (let ((result (parse-coalton-expression "(fn (x) x)" t)))
+    (is (not (null result)))))
+
+;;;
+;;; Match Tests
+;;;
+
+(deftest parse-match-traditional ()
+  "Match expressions parse correctly with traditional expansion"
+  (let ((result (parse-coalton-expression "(match x ((Some y) y) ((None) 0))" nil)))
+    (is (not (null result)))))
+
+(deftest parse-match-hygienic ()
+  "Match expressions parse correctly with hygienic expansion"
+  (let ((result (parse-coalton-expression "(match x ((Some y) y) ((None) 0))" t)))
+    (is (not (null result)))))
+
+;;;
+;;; Wrapper Function Tests
+;;;
+
+(deftest expand-macro-hygienic-wrapper-basic ()
+  "expand-macro-hygienic-wrapper expands a simple CL macro"
+  ;; Test with a simple macro that transforms to something else
+  ;; We use progn which is a real CL macro
+  (parse-form "(progn x)"
+              (lambda (form source)
+                (when form
+                  (let ((result (macro:expand-macro-hygienic-wrapper form source)))
+                    (is (not (null result)))
+                    (is (typep result 'cst:cst)))))))
+
+(deftest make-cl-macro-transformer-creates-function ()
+  "make-cl-macro-transformer returns a function"
+  (let ((transformer (macro:make-cl-macro-transformer '(progn x))))
+    (is (functionp transformer))))
+
+(deftest make-cl-macro-transformer-expands ()
+  "make-cl-macro-transformer creates a transformer that expands macros"
+  (let* ((transformer (macro:make-cl-macro-transformer '(progn x)))
+         (input (stx:make-list-syntax
+                 (list (stx:make-identifier-syntax 'progn)
+                       (stx:make-identifier-syntax 'x))))
+         (result (funcall transformer input)))
+    (is (stx:syntax-object-p result))))
+
+;;;
+;;; Regression Tests - Existing Behavior Unchanged
+;;;
+
+(deftest regression-traditional-parsing-unchanged ()
+  "Traditional parsing (flag=nil) behavior is unchanged"
+  ;; Multiple expression types should all parse the same way
+  (dolist (expr '("42" "x" "(f x)" "(let ((x 1)) x)" "(fn (x) x)"))
+    (let ((result (parse-coalton-expression expr nil)))
+      (is (not (null result)) "Expression ~S should parse" expr))))
+
+;;;
+;;; Complex Expression Tests
+;;;
+
+(deftest parse-complex-nested-traditional ()
+  "Complex nested expressions parse with traditional expansion"
+  (let ((result (parse-coalton-expression
+                 "(let ((f (fn (x) x)))
+                    (match (f 1)
+                      (y y)))"
+                 nil)))
+    (is (not (null result)))))
+
+(deftest parse-complex-nested-hygienic ()
+  "Complex nested expressions parse with hygienic expansion"
+  (let ((result (parse-coalton-expression
+                 "(let ((f (fn (x) x)))
+                    (match (f 1)
+                      (y y)))"
+                 t)))
+    (is (not (null result)))))
+
+;;;
+;;; Error Handling Tests
+;;;
+
+(deftest parse-error-propagates-traditional ()
+  "Parse errors propagate correctly with traditional expansion"
+  ;; Use coalton:let explicitly and add a malformed binding list
+  (signals parser:parse-error
+    (parse-form "(coalton:let)"
+                (lambda (form source)
+                  (let ((macro:*use-hygienic-macros* nil))
+                    (parser:parse-expression form source))))))
+
+(deftest parse-error-propagates-hygienic ()
+  "Parse errors propagate correctly with hygienic expansion"
+  ;; Use coalton:let explicitly and add a malformed binding list
+  (signals parser:parse-error
+    (parse-form "(coalton:let)"
+                (lambda (form source)
+                  (let ((macro:*use-hygienic-macros* t))
+                    (parser:parse-expression form source))))))
