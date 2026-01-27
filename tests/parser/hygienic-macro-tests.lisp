@@ -749,3 +749,199 @@
           (is (eq 'second-value (gethash test-sym macro:*compile-time-bindings*))))
       ;; Cleanup
       (remhash test-sym macro:*compile-time-bindings*))))
+
+;;;
+;;; Phase 6: Advanced Features and Debugging Tests
+;;;
+
+;;; syntax-track-origin tests
+
+(deftest syntax-track-origin-sets-property ()
+  "syntax-track-origin sets origin property on result"
+  (let* ((original (stx:make-identifier-syntax 'my-macro))
+         (expanded (stx:make-identifier-syntax 'result))
+         (tracked (macro:syntax-track-origin expanded original)))
+    (is (stx:syntax-object-p tracked))
+    (is (eq original (stx:stx-property tracked :origin)))))
+
+(deftest syntax-track-origin-preserves-datum ()
+  "syntax-track-origin preserves the result's datum"
+  (let* ((original (stx:make-identifier-syntax 'my-macro))
+         (expanded (stx:make-identifier-syntax 'result))
+         (tracked (macro:syntax-track-origin expanded original)))
+    (is (eq 'result (stx:syntax-e tracked)))))
+
+(deftest syntax-track-origin-preserves-scopes ()
+  "syntax-track-origin preserves the result's scopes"
+  (let* ((my-scope (scope:make-scope-token))
+         (scopes (scope:scope-set-add (scope:empty-scope-set) my-scope))
+         (original (stx:make-identifier-syntax 'my-macro))
+         (expanded (stx:make-identifier-syntax 'result :scopes scopes))
+         (tracked (macro:syntax-track-origin expanded original)))
+    (is (scope:scope-set-member-p (stx:syntax-object-scopes tracked) my-scope))))
+
+(deftest syntax-track-origin-list-syntax ()
+  "syntax-track-origin works with list syntax"
+  (let* ((original (stx:make-list-syntax
+                    (list (stx:make-identifier-syntax 'macro-name)
+                          (stx:make-atom-syntax 1))))
+         (expanded (stx:make-list-syntax
+                    (list (stx:make-identifier-syntax 'let)
+                          (stx:make-identifier-syntax 'x))))
+         (tracked (macro:syntax-track-origin expanded original)))
+    (is (eq original (stx:stx-property tracked :origin)))
+    (is (eq 'let (stx:syntax-e (stx-cst:stx-first tracked))))))
+
+(deftest syntax-track-origin-retrieval ()
+  "Origin can be retrieved from tracked syntax"
+  (let* ((source-loc (cons 10 20))
+         (original (stx:make-identifier-syntax 'my-macro :source source-loc))
+         (expanded (stx:make-identifier-syntax 'result))
+         (tracked (macro:syntax-track-origin expanded original))
+         (retrieved-origin (stx:stx-property tracked :origin)))
+    (is (stx:syntax-object-p retrieved-origin))
+    (is (eq 'my-macro (stx:syntax-e retrieved-origin)))
+    (is (equal source-loc (stx:syntax-object-source retrieved-origin)))))
+
+;;; syntax-debug-info tests
+
+(deftest syntax-debug-info-returns-string ()
+  "syntax-debug-info returns a string"
+  (let* ((stx (stx:make-identifier-syntax 'x))
+         (info (macro:syntax-debug-info stx)))
+    (is (stringp info))))
+
+(deftest syntax-debug-info-shows-datum ()
+  "syntax-debug-info shows the datum"
+  (let* ((stx (stx:make-identifier-syntax 'my-symbol))
+         (info (macro:syntax-debug-info stx)))
+    (is (search "MY-SYMBOL" info))))
+
+(deftest syntax-debug-info-shows-scopes ()
+  "syntax-debug-info shows scope information"
+  (let* ((scope1 (scope:make-scope-token))
+         (scope2 (scope:make-scope-token))
+         (scopes (scope:scope-set-add
+                  (scope:scope-set-add (scope:empty-scope-set) scope1)
+                  scope2))
+         (stx (stx:make-identifier-syntax 'x :scopes scopes))
+         (info (macro:syntax-debug-info stx)))
+    (is (search "Scopes:" info))
+    ;; Should show scope IDs
+    (is (search (format nil "~A" (scope:scope-token-id scope1)) info))
+    (is (search (format nil "~A" (scope:scope-token-id scope2)) info))))
+
+(deftest syntax-debug-info-shows-source ()
+  "syntax-debug-info shows source location"
+  (let* ((source (cons 10 25))
+         (stx (stx:make-identifier-syntax 'x :source source))
+         (info (macro:syntax-debug-info stx)))
+    (is (search "Source:" info))
+    (is (search "10" info))
+    (is (search "25" info))))
+
+(deftest syntax-debug-info-shows-properties ()
+  "syntax-debug-info shows properties"
+  (let* ((stx (stx:stx-with-property
+               (stx:make-identifier-syntax 'x)
+               'my-prop 'my-value))
+         (info (macro:syntax-debug-info stx)))
+    (is (search "Properties:" info))
+    (is (search "MY-PROP" info))))
+
+(deftest syntax-debug-info-shows-identifier-status ()
+  "syntax-debug-info indicates identifier status"
+  (let* ((id-stx (stx:make-identifier-syntax 'foo))
+         (info (macro:syntax-debug-info id-stx)))
+    (is (search "Is Identifier: T" info))
+    (is (search "Symbol: FOO" info))))
+
+(deftest syntax-debug-info-writes-to-stream ()
+  "syntax-debug-info can write to a stream"
+  (let* ((stx (stx:make-identifier-syntax 'x))
+         (output (with-output-to-string (s)
+                   (macro:syntax-debug-info stx s))))
+    (is (search "Datum:" output))))
+
+;;; make-rename-transformer tests
+
+(deftest make-rename-transformer-creates-transformer ()
+  "make-rename-transformer returns a rename-transformer"
+  (let* ((target (stx:make-identifier-syntax 'original-name))
+         (transformer (stx:make-rename-transformer target)))
+    (is (stx:rename-transformer-p transformer))))
+
+(deftest make-rename-transformer-stores-target ()
+  "make-rename-transformer stores the target identifier"
+  (let* ((target (stx:make-identifier-syntax 'original-name))
+         (transformer (stx:make-rename-transformer target)))
+    (is (eq target (stx:rename-transformer-target transformer)))))
+
+(deftest make-rename-transformer-requires-identifier ()
+  "make-rename-transformer errors on non-identifier"
+  (let ((non-id (stx:make-syntax-object '(not an identifier))))
+    (signals error (stx:make-rename-transformer non-id))))
+
+(deftest make-rename-transformer-target-scopes-preserved ()
+  "make-rename-transformer preserves target's scopes"
+  (let* ((my-scope (scope:make-scope-token))
+         (scopes (scope:scope-set-add (scope:empty-scope-set) my-scope))
+         (target (stx:make-identifier-syntax 'original :scopes scopes))
+         (transformer (stx:make-rename-transformer target))
+         (retrieved (stx:rename-transformer-target transformer)))
+    (is (scope:scope-set-member-p (stx:syntax-object-scopes retrieved) my-scope))))
+
+;;; apply-rename-transformer tests
+
+(deftest apply-rename-transformer-identifier ()
+  "apply-rename-transformer handles single identifier"
+  (let* ((target (stx:make-identifier-syntax 'real-name))
+         (transformer (stx:make-rename-transformer target))
+         (alias-use (stx:make-identifier-syntax 'alias))
+         (result (stx:apply-rename-transformer transformer alias-use)))
+    (is (stx:syntax-object-p result))
+    (is (eq 'real-name (stx:syntax-e result)))))
+
+(deftest apply-rename-transformer-list-form ()
+  "apply-rename-transformer handles list form (function call)"
+  (let* ((target (stx:make-identifier-syntax 'original-fn))
+         (transformer (stx:make-rename-transformer target))
+         (ctx (stx:make-syntax-object 'ctx))
+         (alias-call (stx:datum->syntax ctx '(my-alias arg1 arg2)))
+         (result (stx:apply-rename-transformer transformer alias-call)))
+    (is (stx:syntax-object-p result))
+    (let ((datum (stx:syntax-e result)))
+      (is (listp datum))
+      ;; First element should be the target
+      (is (eq target (first datum)))
+      ;; Arguments should be preserved
+      (is (= 3 (length datum))))))
+
+(deftest apply-rename-transformer-preserves-source ()
+  "apply-rename-transformer preserves use-site source location"
+  (let* ((target (stx:make-identifier-syntax 'real-name))
+         (transformer (stx:make-rename-transformer target))
+         (source (cons 5 15))
+         (alias-use (stx:make-identifier-syntax 'alias :source source))
+         (result (stx:apply-rename-transformer transformer alias-use)))
+    (is (equal source (stx:syntax-object-source result)))))
+
+(deftest apply-rename-transformer-uses-target-scopes ()
+  "apply-rename-transformer uses target's scopes for identifier result"
+  (let* ((my-scope (scope:make-scope-token))
+         (target-scopes (scope:scope-set-add (scope:empty-scope-set) my-scope))
+         (target (stx:make-identifier-syntax 'real-name :scopes target-scopes))
+         (transformer (stx:make-rename-transformer target))
+         (alias-use (stx:make-identifier-syntax 'alias))
+         (result (stx:apply-rename-transformer transformer alias-use)))
+    (is (scope:scope-set-member-p (stx:syntax-object-scopes result) my-scope))))
+
+(deftest apply-rename-transformer-preserves-properties ()
+  "apply-rename-transformer preserves use-site properties"
+  (let* ((target (stx:make-identifier-syntax 'real-name))
+         (transformer (stx:make-rename-transformer target))
+         (alias-use (stx:stx-with-property
+                     (stx:make-identifier-syntax 'alias)
+                     'my-prop 'my-value))
+         (result (stx:apply-rename-transformer transformer alias-use)))
+    (is (eq 'my-value (stx:stx-property result 'my-prop)))))

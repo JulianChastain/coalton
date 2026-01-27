@@ -6,7 +6,7 @@ This document describes the implementation of Racket-style hygienic macros in Co
 
 The syntax objects system enables hygienic macro expansion where macro-introduced bindings don't accidentally capture user code, while still allowing intentional capture patterns (like anaphoric macros).
 
-**Current Status:** 237 tests passing across 7 test files.
+**Current Status:** 258 tests passing across 8 test files.
 
 ## Implementation Status
 
@@ -15,29 +15,31 @@ The syntax objects system enables hygienic macro expansion where macro-introduce
 | 1 | Identifier Comparison | Complete | 14 |
 | 2 | Intentional Capture | Complete | 14 |
 | 3 | Local Expansion Control | Complete | 16 |
-| 4 | Definition Contexts | Pending | - |
+| 4 | Definition Contexts | Complete | 19 |
 | 5 | Syntax Patterns | Complete | 27 |
-| 6 | Advanced Features | Pending | - |
+| 6 | Advanced Features | Complete | 22 |
 
 ## Architecture
 
 ```
 src/parser/
-├── scope.lisp           # Scope tokens and scope sets (FSet-based)
-├── syntax-object.lisp   # Core syntax objects with datum/scopes/source/properties
-├── binding-table.lisp   # Binding resolution with maximal subset rule
-├── syntax-cst.lisp      # CST ↔ syntax object conversion
-├── macro.lisp           # Hygienic expansion, local-expand, syntax-local-introduce
-└── syntax-case.lisp     # Pattern matching (syntax-case, with-syntax, syntax templates)
+├── scope.lisp              # Scope tokens and scope sets (FSet-based)
+├── syntax-object.lisp      # Core syntax objects with datum/scopes/source/properties
+├── binding-table.lisp      # Binding resolution with maximal subset rule
+├── definition-context.lisp # Definition contexts for toplevel hygiene
+├── syntax-cst.lisp         # CST ↔ syntax object conversion
+├── macro.lisp              # Hygienic expansion, local-expand, syntax-local-introduce
+└── syntax-case.lisp        # Pattern matching (syntax-case, with-syntax, syntax templates)
 
 tests/parser/
-├── scope-tests.lisp              # 29 tests
-├── syntax-object-tests.lisp      # 43 tests
-├── binding-table-tests.lisp      # 31 tests
-├── syntax-cst-tests.lisp         # 41 tests
-├── hygienic-macro-tests.lisp     # 50 tests
+├── scope-tests.lisp                # 29 tests
+├── syntax-object-tests.lisp        # 43 tests
+├── binding-table-tests.lisp        # 31 tests
+├── definition-context-tests.lisp   # 19 tests
+├── syntax-cst-tests.lisp           # 41 tests
+├── hygienic-macro-tests.lisp       # 72 tests
 ├── hygienic-integration-tests.lisp # 16 tests
-└── syntax-case-tests.lisp        # 27 tests
+└── syntax-case-tests.lisp          # 27 tests
 ```
 
 ---

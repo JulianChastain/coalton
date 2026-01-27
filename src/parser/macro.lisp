@@ -36,6 +36,10 @@
    #:define-compile-time-value            ; FUNCTION
    #:*compile-time-bindings*              ; VARIABLE
    #:+local-expand-max-depth+             ; CONSTANT
+
+   ;; Advanced Features (Phase 6)
+   #:syntax-track-origin                  ; FUNCTION
+   #:syntax-debug-info                    ; FUNCTION
    ))
 
 (in-package #:coalton-impl/parser/macro)
@@ -449,3 +453,69 @@ This allows associating compile-time values with symbols that are not
 CL macros. These values can be retrieved with syntax-local-value."
   (declare (type symbol sym))
   (setf (gethash sym *compile-time-bindings*) value))
+
+;;;
+;;; Advanced Features (Phase 6)
+;;;
+;;; These functions provide production-quality debugging and aliasing support.
+;;;
+
+(defun syntax-track-origin (result-stx origin-stx)
+  "Attach ORIGIN-STX as the origin of RESULT-STX.
+
+This is used to track where macro-expanded code came from, enabling better
+error messages that point to the macro use site rather than the expanded code.
+
+RESULT-STX is the syntax object to annotate (typically macro output).
+ORIGIN-STX is the syntax object representing the original source
+(typically the macro invocation).
+
+Returns a new syntax object with the :origin property set. The origin can be
+retrieved later using (stx-property result :origin).
+
+Example:
+  (syntax-track-origin expanded-code macro-call)
+  ;; Later, when reporting an error in expanded-code:
+  ;; (stx-property expanded-code :origin) => macro-call"
+  (declare (type stx:syntax-object result-stx origin-stx)
+           (values stx:syntax-object))
+  (stx:stx-with-property result-stx :origin origin-stx))
+
+(defun syntax-debug-info (stx &optional (stream nil))
+  "Return a string describing STX's hygiene information for debugging.
+
+This is useful for understanding macro expansion issues and hygiene problems.
+The output includes:
+- The datum (the underlying value)
+- All scopes and their IDs
+- Source location if available
+- Properties
+
+If STREAM is provided, writes directly to it. Otherwise returns a string.
+
+Example output:
+  Syntax Object Debug Info:
+    Datum: FOO
+    Scopes: {1 3 7}
+    Source: (10 . 25)
+    Properties: ((ORIGIN . #<SYNTAX-OBJECT ...>))"
+  (declare (type stx:syntax-object stx)
+           (values (or string null)))
+  (let ((datum (stx:syntax-e stx))
+        (scopes (stx:syntax-object-scopes stx))
+        (source (stx:syntax-object-source stx))
+        (properties (stx:syntax-object-properties stx)))
+    (flet ((format-it (s)
+             (format s "Syntax Object Debug Info:~%")
+             (format s "  Datum: ~S~%" datum)
+             (format s "  Scopes: {~{~A~^ ~}}~%"
+                     (mapcar #'scope:scope-token-id (scope:scope-set->list scopes)))
+             (format s "  Source: ~S~%" source)
+             (format s "  Properties: ~S~%" properties)
+             (when (stx:identifier? stx)
+               (format s "  Is Identifier: T~%")
+               (format s "  Symbol: ~S~%" (stx:identifier-symbol stx)))))
+      (if stream
+          (progn (format-it stream) nil)
+          (with-output-to-string (s)
+            (format-it s))))))
