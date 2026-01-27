@@ -8,9 +8,15 @@
    #:coalton-impl/parser/base
    #:parse-error)
   (:local-nicknames
-   (#:cst #:concrete-syntax-tree))
+   (#:cst #:concrete-syntax-tree)
+   (#:scope #:coalton-impl/parser/scope)
+   (#:stx #:coalton-impl/parser/syntax-object)
+   (#:stx-cst #:coalton-impl/parser/syntax-cst))
   (:export
-   #:expand-macro))
+   #:expand-macro
+   #:expand-macro-hygienic
+   #:syntax->cst
+   #:*use-hygienic-macros*))
 
 (in-package #:coalton-impl/parser/macro)
 
@@ -86,3 +92,83 @@ SEEN-FORMS is a hash table of known forms to prevent hang on cyclical list forms
               result
               :first (rebuild-cst (car form) source-table fallback-source seen-forms)
               :rest (rebuild-cst (cdr form) source-table fallback-source seen-forms)))))))
+
+;;;
+;;; Hygienic Macro Expansion
+;;;
+;;; This implements the "sets of scopes" hygiene algorithm from Flatt (POPL 2016).
+;;; The key insight is that hygiene can be achieved by tracking scope sets on
+;;; syntax objects and using the "flip" operation during expansion.
+;;;
+
+(defvar *use-hygienic-macros* nil
+  "When T, use hygienic macro expansion. When NIL, use traditional expansion.
+This is a feature flag for gradual rollout.")
+
+(defun expand-macro-hygienic (stx transformer)
+  "Expand STX using TRANSFORMER with hygienic scope tracking.
+
+This implements the core hygiene algorithm:
+1. Create a fresh use-site scope and add it to the entire input
+2. Call the transformer with the scoped input
+3. Create a fresh intro scope and flip it on the entire output
+
+The flip operation ensures:
+- Syntax from the input has the use-site scope added then flipped away,
+  returning to its original scopes
+- Syntax introduced by the macro has the intro scope flipped on,
+  distinguishing it from user code
+
+STX must be a syntax-object. TRANSFORMER is a function that takes a
+syntax-object and returns a syntax-object."
+  (declare (type stx:syntax-object stx)
+           (type function transformer)
+           (values stx:syntax-object))
+  (let* ((use-scope (scope:make-scope-token))
+         (intro-scope (scope:make-scope-token))
+         ;; Step 1: Add use-site scope to entire input
+         (input (stx:stx-add-scope stx use-scope))
+         ;; Step 2: Call transformer
+         (output (funcall transformer input))
+         ;; Step 3: Flip intro scope on output
+         (result (stx:stx-flip-scope output intro-scope)))
+    ;; Also flip the use-site scope to remove it from passed-through syntax
+    (stx:stx-flip-scope result use-scope)))
+
+(defun syntax->cst (stx fallback-source)
+  "Convert a syntax object back to a CST for compatibility with existing parser.
+
+This strips the syntax wrapper and rebuilds CST nodes, preserving source
+information from the syntax objects where available."
+  (declare (type stx:syntax-object stx)
+           (values cst:cst))
+  (let ((datum (stx:syntax-e stx))
+        (source (or (stx:syntax-object-source stx) fallback-source)))
+    (cond
+      ((null datum)
+       (make-instance 'cst:atom-cst :raw nil :source source))
+      ((atom datum)
+       (make-instance 'cst:atom-cst :raw datum :source source))
+      (t
+       ;; List: recursively convert elements
+       (labels ((convert-list (elements)
+                  (if (null elements)
+                      (make-instance 'cst:atom-cst :raw nil :source source)
+                      (let* ((first-elem (car elements))
+                             (first-source (or (and (stx:syntax-object-p first-elem)
+                                                    (stx:syntax-object-source first-elem))
+                                               source)))
+                        (make-instance 'cst:cons-cst
+                                       :raw (mapcar (lambda (e)
+                                                      (if (stx:syntax-object-p e)
+                                                          (stx:syntax->datum e)
+                                                          e))
+                                                    elements)
+                                       :source source
+                                       :first (if (stx:syntax-object-p first-elem)
+                                                  (syntax->cst first-elem fallback-source)
+                                                  (make-instance 'cst:atom-cst
+                                                                 :raw first-elem
+                                                                 :source first-source))
+                                       :rest (convert-list (cdr elements)))))))
+         (convert-list datum))))))

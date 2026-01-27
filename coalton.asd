@@ -292,7 +292,12 @@
                (:file "error-tests")
                (:module "parser"
                 :serial t
-                :components ((:file "cursor-tests")))
+                :components ((:file "cursor-tests")
+                             (:file "scope-tests")
+                             (:file "syntax-object-tests")
+                             (:file "binding-table-tests")
+                             (:file "syntax-cst-tests")
+                             (:file "hygienic-macro-tests")))
                (:file "entry-tests")
                (:file "toplevel-tests")
                (:file "type-inference-tests")

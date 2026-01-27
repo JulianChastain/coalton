@@ -40,6 +40,12 @@
                              (:file "reader")
                              (:file "types")
                              (:file "pattern")
+                             ;; Syntax objects for hygienic macros
+                             (:file "scope")
+                             (:file "syntax-object")
+                             (:file "binding-table")
+                             (:file "syntax-cst")
+                             ;; Macro expansion
                              (:file "macro")
                              (:file "expression")
                              (:file "toplevel")
