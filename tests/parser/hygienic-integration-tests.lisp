@@ -221,3 +221,138 @@ When HYGIENIC is true, use hygienic macro expansion."
                 (lambda (form source)
                   (let ((macro:*use-hygienic-macros* t))
                     (parser:parse-expression form source))))))
+
+;;;
+;;; Scoping Correctness Tests
+;;;
+;;; These tests verify that parsing produces correct structure.
+;;; Note: We use coalton: package prefixes to ensure correct symbol resolution.
+;;;
+
+(deftest let-expression-parses-to-node-let ()
+  "Let expressions should parse to node-let with proper structure.
+
+   (coalton:let ((x 1)) x) - should produce a node-let with one binding"
+  (let ((result (parse-coalton-expression "(coalton:let ((x 1)) x)" nil)))
+    (is (not (null result)))
+    (is (typep result 'parser:node-let))
+    ;; Should have bindings and a body
+    (is (not (null (parser:node-let-bindings result))))
+    (is (not (null (parser:node-let-body result))))))
+
+(deftest nested-let-parses-correctly ()
+  "Nested let expressions should parse correctly.
+
+   (coalton:let ((x 1)) (coalton:let ((x 2)) x)) - should produce nested node-let"
+  (let ((result (parse-coalton-expression "(coalton:let ((x 1)) (coalton:let ((x 2)) x))" nil)))
+    (is (not (null result)))
+    (is (typep result 'parser:node-let))
+    ;; The body's last-node should be another let
+    (let* ((body (parser:node-let-body result))
+           (inner (parser:node-body-last-node body)))
+      (is (typep inner 'parser:node-let)))))
+
+(deftest let-with-multiple-bindings ()
+  "Let with multiple bindings should parse correctly.
+
+   (coalton:let ((x 1) (y 2)) x)"
+  (let ((result (parse-coalton-expression "(coalton:let ((x 1) (y 2)) x)" nil)))
+    (is (not (null result)))
+    (is (typep result 'parser:node-let))
+    ;; Should have two bindings
+    (is (= 2 (length (parser:node-let-bindings result))))))
+
+(deftest fn-expression-parses-correctly ()
+  "Function expressions should parse to node-abstraction.
+
+   (coalton:fn (x) x) - should produce a node-abstraction"
+  (let ((result (parse-coalton-expression "(coalton:fn (x) x)" nil)))
+    (is (not (null result)))
+    (is (typep result 'parser:node-abstraction))
+    ;; Should have params and body
+    (is (not (null (parser:node-abstraction-params result))))
+    (is (not (null (parser:node-abstraction-body result))))))
+
+(deftest fn-in-let-body-parses ()
+  "Function in let body should parse correctly.
+
+   (coalton:let ((x 1)) (coalton:fn (y) y))"
+  (let ((result (parse-coalton-expression "(coalton:let ((x 1)) (coalton:fn (y) y))" nil)))
+    (is (not (null result)))
+    (is (typep result 'parser:node-let))
+    (let* ((body (parser:node-let-body result))
+           (last-node (parser:node-body-last-node body)))
+      (is (typep last-node 'parser:node-abstraction)))))
+
+(deftest match-expression-parses-correctly ()
+  "Match expressions should parse to node-match.
+
+   (coalton:match x ((Some y) y))"
+  (let ((result (parse-coalton-expression "(coalton:match x ((Some y) y))" nil)))
+    (is (not (null result)))
+    (is (typep result 'parser:node-match))
+    ;; Should have branches
+    (is (not (null (parser:node-match-branches result))))))
+
+;;;
+;;; Syntax Object Preservation Tests
+;;;
+
+(deftest cst-to-syntax-preserves-structure ()
+  "Converting CST to syntax and back preserves the structure"
+  (parse-form "(let ((x 1)) (f x))"
+              (lambda (form source)
+                (declare (ignore source))
+                (when form
+                  ;; Convert to syntax
+                  (let* ((stx (stx-cst:cst->syntax form))
+                         ;; Convert back to CST
+                         (back (macro:syntax->cst stx (cst:source form))))
+                    ;; Raw datum should be preserved
+                    (is (equal (cst:raw form) (cst:raw back))))))))
+
+(defun flatten-datum (tree)
+  "Flatten a nested list into a flat list of atoms."
+  (cond
+    ((null tree) nil)
+    ((atom tree) (list tree))
+    (t (append (flatten-datum (car tree))
+               (flatten-datum (cdr tree))))))
+
+(deftest hygienic-expansion-preserves-user-identifiers ()
+  "Hygienic expansion should preserve user identifier names"
+  (let ((macro:*use-hygienic-macros* t))
+    (parse-form "(let ((my-var 1)) my-var)"
+                (lambda (form source)
+                  (declare (ignore source))
+                  (when form
+                    (let ((stx (stx-cst:cst->syntax form)))
+                      ;; The datum should contain 'my-var
+                      (let ((datum (stx:syntax->datum stx)))
+                        (is (member 'my-var (flatten-datum datum))))))))))
+
+;;;
+;;; Macro Expansion Integration
+;;;
+
+(deftest progn-macro-expands ()
+  "CL macros like progn should expand correctly"
+  (let ((macro:*use-hygienic-macros* t))
+    (parse-form "(progn 1 2 3)"
+                (lambda (form source)
+                  (when form
+                    (let ((expanded (macro:expand-macro-hygienic-wrapper form source)))
+                      ;; Should return a CST
+                      (is (typep expanded 'cst:cst))))))))
+
+(deftest when-macro-expands-to-if ()
+  "The when macro should expand to an if form"
+  (let ((macro:*use-hygienic-macros* t))
+    (parse-form "(when test body)"
+                (lambda (form source)
+                  (when form
+                    (let ((expanded (macro:expand-macro-hygienic-wrapper form source)))
+                      ;; Should be expanded (when -> if)
+                      (is (typep expanded 'cst:cst))
+                      ;; Raw should start with IF
+                      (is (eq 'if (first (cst:raw expanded))))))))))

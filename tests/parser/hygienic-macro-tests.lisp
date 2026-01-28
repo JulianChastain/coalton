@@ -945,3 +945,387 @@
                      'my-prop 'my-value))
          (result (stx:apply-rename-transformer transformer alias-use)))
     (is (eq 'my-value (stx:stx-property result 'my-prop)))))
+
+;;;
+;;; End-to-End Hygiene Scenario Tests
+;;;
+;;; These tests verify that the hygiene system achieves its PRIMARY PURPOSE:
+;;; preventing accidental variable capture in macro expansion. Unlike the
+;;; tests above which verify mechanics, these tests verify outcomes.
+;;;
+
+(deftest hygiene-swap-macro-no-tmp-capture ()
+  "The canonical swap macro example: user's tmp is not captured.
+
+   A typical non-hygienic swap macro would expand to:
+   (let ((tmp x)) (setf x y) (setf y tmp))
+
+   If the user has their own 'tmp' variable, the macro's tmp would
+   shadow it incorrectly. With hygiene, the macro's tmp has different
+   scopes and cannot be confused with the user's tmp."
+  (let* ((user-tmp-scope (scope:make-scope-token))
+         (user-scopes (scope:scope-set-add (scope:empty-scope-set) user-tmp-scope))
+         ;; User's tmp identifier (in their lexical context)
+         (user-tmp (stx:make-identifier-syntax 'tmp :scopes user-scopes))
+         ;; Simulate swap macro expansion
+         (intro-scope nil)
+         (use-scope nil)
+         (macro-tmp nil)
+         (result (macro:expand-macro-hygienic/ctx
+                  (stx:make-list-syntax (list (stx:make-identifier-syntax 'swap)
+                                              (stx:make-identifier-syntax 'x)
+                                              (stx:make-identifier-syntax 'y)))
+                  (lambda (stx)
+                    (declare (ignore stx))
+                    (let ((ctx macro:*current-expansion-context*))
+                      (setf intro-scope (macro:expansion-context-intro-scope ctx))
+                      (setf use-scope (macro:expansion-context-use-scope ctx)))
+                    ;; Macro introduces its own 'tmp'
+                    (setf macro-tmp (stx:make-identifier-syntax 'tmp))
+                    ;; Return a structure containing the macro's tmp
+                    (stx:make-list-syntax (list macro-tmp))))))
+    (declare (ignore result))
+    ;; The key test: user's tmp and macro's tmp should NOT be equal
+    ;; because they have different scope sets
+    ;; After expansion flips use-scope and intro-scope, the macro's tmp
+    ;; will have intro-scope (since it was introduced by the macro)
+    (let ((macro-tmp-final (stx:stx-flip-scope
+                            (stx:stx-flip-scope macro-tmp intro-scope)
+                            use-scope)))
+      ;; After expansion, macro-tmp has intro-scope, user-tmp has user-scope
+      (is (not (stx:free-identifier=? user-tmp macro-tmp-final))
+          "User's tmp and macro's tmp should not be free-identifier=?"))))
+
+(deftest hygiene-or-macro-temp-not-captured ()
+  "The or macro pattern: temp binding should not leak to arguments.
+
+   (or a b) might expand to:
+   (let ((temp a)) (if temp temp b))
+
+   If 'b' references a user variable named 'temp', the macro's temp
+   should not shadow it."
+  (let* ((result (macro:expand-macro-hygienic/ctx
+                  (stx:make-list-syntax
+                   (list (stx:make-identifier-syntax 'or)
+                         (stx:make-identifier-syntax 'a)
+                         (stx:make-identifier-syntax 'b)))
+                  (lambda (stx)
+                    ;; Simulate or macro expansion
+                    (let* ((a (stx-cst:stx-second stx))
+                           (b (stx-cst:stx-third stx))
+                           ;; Macro introduces temp binding
+                           (temp-id (stx:make-identifier-syntax 'temp)))
+                      ;; Build: (let ((temp a)) (if temp temp b))
+                      (stx:datum->syntax stx
+                        `(let ((,temp-id ,(stx:syntax->datum a)))
+                           (if ,temp-id ,temp-id ,(stx:syntax->datum b)))))))))
+    ;; Verify structure was created
+    (is (eq 'let (stx:syntax-e (stx-cst:stx-first result))))
+    ;; The temp in the let bindings should have intro-scope
+    (let* ((bindings (stx-cst:stx-second result))
+           (first-binding (stx-cst:stx-first bindings))
+           (temp-binding-id (stx-cst:stx-first first-binding)))
+      ;; temp-binding-id should be an identifier
+      (is (stx:identifier? temp-binding-id))
+      ;; Most importantly: any user variable 'temp' passed in the body
+      ;; would have different scopes (no intro-scope), so they won't clash
+      (let ((user-temp (stx:make-identifier-syntax 'temp)))
+        (is (not (stx:free-identifier=? temp-binding-id user-temp))
+            "Macro's temp should differ from user's temp")))))
+
+(deftest hygiene-macro-reference-not-affected-by-later-shadowing ()
+  "A macro that references 'x' should still see the original x even
+   if the user later shadows x in the expansion context.
+
+   (define x 1)
+   (define-macro (use-x) x)  ; captures reference to x
+   (let ((x 2)) (use-x))     ; should return 1, not 2"
+  (let* ((original-x-scope (scope:make-scope-token))
+         (original-x-scopes (scope:scope-set-add (scope:empty-scope-set) original-x-scope))
+         ;; The original x binding that the macro captured
+         (original-x (stx:make-identifier-syntax 'x :scopes original-x-scopes))
+         ;; Simulate the macro expansion with the captured reference
+         (result (macro:expand-macro-hygienic/ctx
+                  (stx:make-list-syntax
+                   (list (stx:make-identifier-syntax 'use-x)))
+                  (lambda (stx)
+                    (declare (ignore stx))
+                    ;; Macro just returns its captured reference to x
+                    original-x))))
+    ;; The returned x should still have the original scopes
+    ;; (plus the expansion's intro-scope gets flipped on, then use-scope flipped)
+    (is (stx:identifier? result))
+    (is (eq 'x (stx:identifier-symbol result)))
+    ;; A user's shadowing x (with different scopes) should not equal original-x
+    (let* ((user-shadowing-scope (scope:make-scope-token))
+           (user-x (stx:make-identifier-syntax 'x
+                     :scopes (scope:scope-set-add (scope:empty-scope-set)
+                                                   user-shadowing-scope))))
+      (is (not (stx:free-identifier=? result user-x))
+          "Macro's reference to original x should differ from user's shadowing x"))))
+
+(deftest hygiene-intentional-capture-with-syntax-local-introduce ()
+  "Using syntax-local-introduce, a macro can intentionally break hygiene
+   to create anaphoric macros where the introduced identifier IS visible
+   to user code.
+
+   (aif (find item list)
+     (process it)  ; 'it' is bound by the macro
+     (error 'not-found))"
+  (let* ((intro-scope nil)
+         (it-identifier nil)
+         (result (macro:expand-macro-hygienic/ctx
+                  (stx:make-list-syntax
+                   (list (stx:make-identifier-syntax 'aif)
+                         (stx:make-identifier-syntax 'test-expr)
+                         (stx:make-identifier-syntax 'then-expr)
+                         (stx:make-identifier-syntax 'else-expr)))
+                  (lambda (stx)
+                    (let ((ctx macro:*current-expansion-context*))
+                      (setf intro-scope (macro:expansion-context-intro-scope ctx)))
+                    ;; Create 'it' using syntax-local-introduce for intentional capture
+                    (setf it-identifier (macro:syntax-local-introduce
+                                         (stx:make-identifier-syntax 'it)))
+                    ;; Build expansion
+                    (let ((test (stx-cst:stx-second stx))
+                          (then (stx-cst:stx-third stx))
+                          (else (stx-cst:stx-nth 3 stx)))
+                      (stx:datum->syntax stx
+                        `(let ((,it-identifier ,(stx:syntax->datum test)))
+                           (if ,it-identifier
+                               ,(stx:syntax->datum then)
+                               ,(stx:syntax->datum else)))))))))
+    ;; Find the 'it' in the result
+    (let* ((bindings (stx-cst:stx-second result))
+           (first-binding (stx-cst:stx-first bindings))
+           (it-in-result (stx-cst:stx-first first-binding)))
+      ;; The 'it' should NOT have intro-scope (syntax-local-introduce removes it)
+      (is (not (scope:scope-set-member-p (stx:syntax-object-scopes it-in-result) intro-scope))
+          "The 'it' identifier should not have intro-scope (visible to user code)"))))
+
+(deftest hygiene-user-reference-in-macro-body-resolves-correctly ()
+  "User identifiers passed to a macro should resolve in the user's
+   lexical environment, not the macro's.
+
+   (let ((x 1))
+     (my-macro x))  ; x here should refer to user's x, not any x in macro"
+  (let* ((user-x-scope (scope:make-scope-token))
+         (user-scopes (scope:scope-set-add (scope:empty-scope-set) user-x-scope))
+         ;; User's x with their lexical scope
+         (user-x (stx:make-identifier-syntax 'x :scopes user-scopes))
+         ;; Build macro call with user's x
+         (input (stx:make-list-syntax
+                 (list (stx:make-identifier-syntax 'my-macro)
+                       user-x)))
+         (x-in-result nil)
+         (result (macro:expand-macro-hygienic/ctx
+                  input
+                  (lambda (stx)
+                    ;; Macro passes through the user's x to its output
+                    (setf x-in-result (stx-cst:stx-second stx))
+                    ;; Return structure containing user's x
+                    (stx:make-list-syntax
+                     (list (stx:make-identifier-syntax 'result)
+                           x-in-result))))))
+    (declare (ignore result))
+    ;; After expansion, the user's x should still have user's scope
+    ;; The expansion adds/removes scopes but user's original scope should remain
+    (is (scope:scope-set-member-p (stx:syntax-object-scopes x-in-result) user-x-scope)
+        "User's x should retain its original scopes through macro expansion")))
+
+;;;
+;;; Negative Hygiene Tests
+;;;
+;;; These tests demonstrate that WITHOUT proper scope handling, capture WOULD
+;;; occur, proving that the hygiene mechanisms are necessary and effective.
+;;;
+
+(deftest negative-without-scopes-identifiers-clash ()
+  "Without different scopes, same-named identifiers would be equal.
+   This demonstrates what hygiene prevents."
+  (let* ((macro-tmp (stx:make-identifier-syntax 'tmp))
+         (user-tmp (stx:make-identifier-syntax 'tmp)))
+    ;; Both have empty scopes -> they ARE equal
+    ;; This is what would cause capture in a non-hygienic system
+    (is (stx:free-identifier=? macro-tmp user-tmp)
+        "Without scopes, same-symbol identifiers are equal (would cause capture)")))
+
+(deftest negative-same-scopes-still-equal ()
+  "With the SAME scopes, identifiers are still equal.
+   Hygiene works because different contexts have different scopes."
+  (let* ((shared-scope (scope:make-scope-token))
+         (scopes (scope:scope-set-add (scope:empty-scope-set) shared-scope))
+         (id1 (stx:make-identifier-syntax 'x :scopes scopes))
+         (id2 (stx:make-identifier-syntax 'x :scopes scopes)))
+    (is (stx:free-identifier=? id1 id2)
+        "Identifiers with same symbol and same scopes are equal")))
+
+(deftest positive-different-scopes-not-equal ()
+  "With DIFFERENT scopes, same-named identifiers are NOT equal.
+   This is the key mechanism that prevents capture."
+  (let* ((scope1 (scope:make-scope-token))
+         (scope2 (scope:make-scope-token))
+         (scopes1 (scope:scope-set-add (scope:empty-scope-set) scope1))
+         (scopes2 (scope:scope-set-add (scope:empty-scope-set) scope2))
+         (id1 (stx:make-identifier-syntax 'x :scopes scopes1))
+         (id2 (stx:make-identifier-syntax 'x :scopes scopes2)))
+    (is (not (stx:free-identifier=? id1 id2))
+        "Identifiers with same symbol but different scopes are NOT equal (prevents capture)")))
+
+(deftest demonstrate-scope-distinguishes-macro-introduced ()
+  "The scope operations during expansion distinguish macro-introduced
+   identifiers from user identifiers.
+
+   After expansion:
+   - Passed-through user syntax: ends up with just intro-scope
+     (use-scope added then flipped off, intro-scope flipped on)
+   - Macro-introduced syntax: ends up with both intro-scope and use-scope
+     (both scopes flipped on since it didn't have them)
+
+   The difference in use-scope is what distinguishes them."
+  (let* ((user-x (stx:make-identifier-syntax 'x))
+         (intro-scope nil)
+         (use-scope nil)
+         (result (macro:expand-macro-hygienic/ctx
+                  (stx:make-list-syntax
+                   (list (stx:make-identifier-syntax 'test-macro)
+                         user-x))
+                  (lambda (stx)
+                    (let ((ctx macro:*current-expansion-context*))
+                      (setf intro-scope (macro:expansion-context-intro-scope ctx))
+                      (setf use-scope (macro:expansion-context-use-scope ctx)))
+                    ;; Return both the passed-through user-x and a new x
+                    (let ((passed-through (stx-cst:stx-second stx)))
+                      (stx:make-list-syntax
+                       (list passed-through
+                             (stx:make-identifier-syntax 'x))))))))
+    (let ((passed-through-result (stx-cst:stx-first result))
+          (macro-x-result (stx-cst:stx-second result)))
+      ;; Both should have intro-scope
+      (is (scope:scope-set-member-p
+           (stx:syntax-object-scopes passed-through-result)
+           intro-scope)
+          "Passed-through identifier should have intro-scope")
+      (is (scope:scope-set-member-p
+           (stx:syntax-object-scopes macro-x-result)
+           intro-scope)
+          "Macro-introduced identifier should have intro-scope")
+      ;; Passed-through should NOT have use-scope (it was added then flipped off)
+      (is (not (scope:scope-set-member-p
+                (stx:syntax-object-scopes passed-through-result)
+                use-scope))
+          "Passed-through identifier should NOT have use-scope")
+      ;; Macro-introduced SHOULD have use-scope (it was flipped on since absent)
+      (is (scope:scope-set-member-p
+           (stx:syntax-object-scopes macro-x-result)
+           use-scope)
+          "Macro-introduced identifier SHOULD have use-scope")
+      ;; Therefore they are not equal (different scope sets)
+      (is (not (stx:free-identifier=? passed-through-result macro-x-result))
+          "Passed-through and macro-introduced identifiers differ"))))
+
+;;;
+;;; Nested Macro Expansion Tests
+;;;
+
+(deftest nested-expansion-accumulates-scopes ()
+  "When a macro expands to another macro call, scopes accumulate correctly.
+   Each expansion level adds its own intro/use scopes."
+  (let* ((intro-scope-outer nil)
+         (intro-scope-inner nil)
+         ;; Outer expansion
+         (outer-result (macro:expand-macro-hygienic/ctx
+                        (stx:make-identifier-syntax 'outer-macro)
+                        (lambda (stx)
+                          (declare (ignore stx))
+                          (setf intro-scope-outer
+                                (macro:expansion-context-intro-scope
+                                 macro:*current-expansion-context*))
+                          ;; Outer macro creates an identifier and returns it
+                          ;; wrapped as if calling inner macro
+                          (stx:make-list-syntax
+                           (list (stx:make-identifier-syntax 'inner-macro)
+                                 (stx:make-identifier-syntax 'x)))))))
+    ;; Now simulate inner expansion on the result
+    (let ((inner-result (macro:expand-macro-hygienic/ctx
+                         outer-result
+                         (lambda (stx)
+                           (setf intro-scope-inner
+                                 (macro:expansion-context-intro-scope
+                                  macro:*current-expansion-context*))
+                           ;; Inner macro creates its own identifier
+                           ;; Return both: the one from outer and a fresh one
+                           (stx:make-list-syntax
+                            (list (stx-cst:stx-second stx)  ; the one from outer
+                                  (stx:make-identifier-syntax 'x)))))))
+      ;; The identifier from outer expansion now has BOTH intro scopes
+      ;; (outer's intro-scope was flipped on, then inner's intro-scope was flipped on)
+      (let ((outer-x-in-result (stx-cst:stx-first inner-result))
+            (inner-x-in-result (stx-cst:stx-second inner-result)))
+        ;; Outer's x: got intro-scope-outer during outer expansion,
+        ;; then got intro-scope-inner during inner expansion
+        (is (scope:scope-set-member-p
+             (stx:syntax-object-scopes outer-x-in-result)
+             intro-scope-outer)
+            "Identifier from outer should have outer's intro-scope")
+        (is (scope:scope-set-member-p
+             (stx:syntax-object-scopes outer-x-in-result)
+             intro-scope-inner)
+            "Identifier from outer should have inner's intro-scope after inner expansion")
+        ;; Inner's x: only got intro-scope-inner
+        (is (scope:scope-set-member-p
+             (stx:syntax-object-scopes inner-x-in-result)
+             intro-scope-inner)
+            "Inner's fresh identifier should have inner's intro-scope")
+        ;; Inner's x should NOT have outer's intro-scope
+        (is (not (scope:scope-set-member-p
+                  (stx:syntax-object-scopes inner-x-in-result)
+                  intro-scope-outer))
+            "Inner's fresh identifier should NOT have outer's intro-scope")
+        ;; They should be different (outer has additional scopes from outer expansion)
+        (is (not (stx:free-identifier=? outer-x-in-result inner-x-in-result))
+            "Identifiers from different expansion levels should differ")))))
+
+(deftest deeply-nested-expansion-maintains-hygiene ()
+  "Multiple levels of nesting still maintain hygiene between all levels.
+
+   Each expansion adds unique scopes, so even though we create identifiers
+   with the same symbol 'x' at each level, they end up with different
+   scope sets after all the flip operations."
+  (let ((level-scopes (list)))
+    ;; Simulate 3 sequential (not nested) expansions, each creating an 'x'
+    ;; This tests that different expansion contexts create distinct identifiers
+    (let* ((result1 (macro:expand-macro-hygienic/ctx
+                     (stx:make-identifier-syntax 'start)
+                     (lambda (stx)
+                       (declare (ignore stx))
+                       (push (macro:expansion-context-intro-scope
+                              macro:*current-expansion-context*)
+                             level-scopes)
+                       (stx:make-identifier-syntax 'x))))
+           (result2 (macro:expand-macro-hygienic/ctx
+                     (stx:make-identifier-syntax 'start)
+                     (lambda (stx)
+                       (declare (ignore stx))
+                       (push (macro:expansion-context-intro-scope
+                              macro:*current-expansion-context*)
+                             level-scopes)
+                       (stx:make-identifier-syntax 'x))))
+           (result3 (macro:expand-macro-hygienic/ctx
+                     (stx:make-identifier-syntax 'start)
+                     (lambda (stx)
+                       (declare (ignore stx))
+                       (push (macro:expansion-context-intro-scope
+                              macro:*current-expansion-context*)
+                             level-scopes)
+                       (stx:make-identifier-syntax 'x)))))
+      ;; All level-scopes should be distinct
+      (is (= 3 (length (remove-duplicates level-scopes :test #'eq)))
+          "Each expansion should have a distinct intro-scope")
+      ;; All result identifiers should be different (different scope sets)
+      (is (not (stx:free-identifier=? result1 result2))
+          "Identifiers from different expansions should differ (1 vs 2)")
+      (is (not (stx:free-identifier=? result2 result3))
+          "Identifiers from different expansions should differ (2 vs 3)")
+      (is (not (stx:free-identifier=? result1 result3))
+          "Identifiers from different expansions should differ (1 vs 3)"))))

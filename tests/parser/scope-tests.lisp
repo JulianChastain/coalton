@@ -330,3 +330,127 @@
 (deftest scope-set->list-empty ()
   "scope-set->list returns empty list for empty set"
   (is (null (scope:scope-set->list (scope:empty-scope-set)))))
+
+;;;
+;;; Large Scope Set Tests
+;;;
+;;; Real macro expansions can accumulate many scopes through nested expansion.
+;;; These tests verify correctness and reasonable performance with larger sets.
+;;;
+
+(deftest large-scope-set-creation ()
+  "Creating scope sets with many elements works correctly"
+  (let ((tokens (loop repeat 20 collect (scope:make-scope-token))))
+    (let ((set (reduce (lambda (s tok) (scope:scope-set-add s tok))
+                       tokens
+                       :initial-value (scope:empty-scope-set))))
+      (is (= 20 (scope:scope-set-size set)))
+      ;; All tokens should be members
+      (dolist (tok tokens)
+        (is (scope:scope-set-member-p set tok))))))
+
+(deftest large-scope-set-subset-operations ()
+  "Subset operations work correctly with larger sets"
+  (let* ((all-tokens (loop repeat 15 collect (scope:make-scope-token)))
+         (large-set (reduce (lambda (s tok) (scope:scope-set-add s tok))
+                            all-tokens
+                            :initial-value (scope:empty-scope-set)))
+         ;; Take first 10 tokens for smaller set
+         (small-tokens (subseq all-tokens 0 10))
+         (small-set (reduce (lambda (s tok) (scope:scope-set-add s tok))
+                            small-tokens
+                            :initial-value (scope:empty-scope-set))))
+    ;; small-set should be a subset of large-set
+    (is (scope:scope-set-subset-p small-set large-set))
+    ;; large-set should NOT be a subset of small-set
+    (is (not (scope:scope-set-subset-p large-set small-set)))))
+
+(deftest large-scope-set-flip-roundtrip ()
+  "Flip roundtrip works correctly with many scopes"
+  (let* ((base-tokens (loop repeat 10 collect (scope:make-scope-token)))
+         (flip-token (scope:make-scope-token))
+         (base-set (reduce (lambda (s tok) (scope:scope-set-add s tok))
+                           base-tokens
+                           :initial-value (scope:empty-scope-set)))
+         ;; Flip twice should return to original
+         (after-flip1 (scope:scope-set-flip base-set flip-token))
+         (after-flip2 (scope:scope-set-flip after-flip1 flip-token)))
+    (is (scope:scope-set-equal base-set after-flip2)
+        "Double flip returns to original even with many base scopes")))
+
+(deftest large-scope-set-union-intersection ()
+  "Union and intersection work correctly with larger sets"
+  (let* ((tokens-a (loop repeat 10 collect (scope:make-scope-token)))
+         (tokens-b (loop repeat 10 collect (scope:make-scope-token)))
+         ;; Share 5 tokens between sets
+         (shared-tokens (subseq tokens-a 0 5))
+         (set-a (reduce (lambda (s tok) (scope:scope-set-add s tok))
+                        tokens-a
+                        :initial-value (scope:empty-scope-set)))
+         (set-b-base (reduce (lambda (s tok) (scope:scope-set-add s tok))
+                             tokens-b
+                             :initial-value (scope:empty-scope-set)))
+         (set-b (reduce (lambda (s tok) (scope:scope-set-add s tok))
+                        shared-tokens
+                        :initial-value set-b-base)))
+    ;; Union should have all unique tokens
+    (let ((union (scope:scope-set-union set-a set-b)))
+      ;; 10 from A + 10 from B - 5 shared = 15 unique
+      ;; Wait, set-b has 10 unique + 5 shared = 15
+      ;; set-a has 10
+      ;; So union has 10 + 10 = 20 unique tokens
+      ;; (since tokens-a and tokens-b are disjoint, shared-tokens are from tokens-a)
+      (is (= 20 (scope:scope-set-size union))))
+    ;; Intersection should have shared tokens
+    (let ((intersection (scope:scope-set-intersection set-a set-b)))
+      (is (= 5 (scope:scope-set-size intersection)))
+      (dolist (tok shared-tokens)
+        (is (scope:scope-set-member-p intersection tok))))))
+
+(deftest nested-expansion-scope-accumulation ()
+  "Simulates scope accumulation through nested macro expansions"
+  ;; Each macro expansion adds intro and use scopes
+  ;; After N levels, syntax might have 2N scopes
+  (let* ((expansion-scopes
+           (loop repeat 10
+                 collect (list (scope:make-scope-token)   ; intro
+                               (scope:make-scope-token)))) ; use
+         ;; Start with empty scopes
+         (accumulated (scope:empty-scope-set)))
+    ;; Simulate each expansion level
+    (dolist (level expansion-scopes)
+      (let ((intro-scope (first level))
+            (use-scope (second level)))
+        ;; Input gets use-scope added, then intro flipped, then use flipped
+        ;; Net effect on input: nothing (add then flip removes)
+        ;; But new syntax gets intro flipped on
+        ;; For simplicity, just add both scopes
+        (setf accumulated (scope:scope-set-add accumulated intro-scope))
+        (setf accumulated (scope:scope-set-add accumulated use-scope))))
+    ;; Should have 20 scopes
+    (is (= 20 (scope:scope-set-size accumulated)))
+    ;; All operations should still work
+    (let ((first-intro (first (first expansion-scopes))))
+      (is (scope:scope-set-member-p accumulated first-intro))
+      (let ((without-first (scope:scope-set-remove accumulated first-intro)))
+        (is (= 19 (scope:scope-set-size without-first)))
+        (is (not (scope:scope-set-member-p without-first first-intro)))))))
+
+(deftest scope-set-ordering-independence ()
+  "Scope sets with same elements are equal regardless of insertion order"
+  (let* ((tokens (loop repeat 10 collect (scope:make-scope-token)))
+         (reversed-tokens (reverse tokens))
+         (set1 (reduce (lambda (s tok) (scope:scope-set-add s tok))
+                       tokens
+                       :initial-value (scope:empty-scope-set)))
+         (set2 (reduce (lambda (s tok) (scope:scope-set-add s tok))
+                       reversed-tokens
+                       :initial-value (scope:empty-scope-set))))
+    (is (scope:scope-set-equal set1 set2)
+        "Sets with same elements should be equal regardless of insertion order")
+    ;; Both should have same size
+    (is (= (scope:scope-set-size set1) (scope:scope-set-size set2)))
+    ;; Both should contain all tokens
+    (dolist (tok tokens)
+      (is (scope:scope-set-member-p set1 tok))
+      (is (scope:scope-set-member-p set2 tok)))))

@@ -313,3 +313,194 @@
          (result (bt:binding-table-resolve table 'x scopes)))
     (is (bt:resolution-bound-p result))
     (is (eq :exact (bt:scope-binding-value (bt:resolution-result-binding result))))))
+
+;;;
+;;; Complex Scope Resolution Tests
+;;;
+;;; These tests verify the binding table handles complex scenarios with
+;;; many overlapping scope sets and deeply nested bindings.
+;;;
+
+(deftest resolution-many-nested-scopes ()
+  "Resolution with deeply nested scope hierarchy (10+ levels)"
+  (let* ((scopes (loop repeat 10 collect (scope:make-scope-token)))
+         (table (bt:make-binding-table)))
+    ;; Create bindings at each nesting level:
+    ;; x@{s1}, x@{s1,s2}, x@{s1,s2,s3}, ... x@{s1,...,s10}
+    (loop for i from 1 to 10
+          for level-scopes = (make-scopes (first scopes))
+            then (scope:scope-set-add level-scopes (nth (1- i) scopes))
+          do (setf table (bt:binding-table-add table 'x level-scopes
+                                                (intern (format nil "LEVEL-~D" i)))))
+    ;; Lookup at each level should find that level's binding
+    ;; (maximal subset = exact match at that level)
+    (loop for i from 1 to 10
+          for lookup-scopes = (make-scopes (first scopes))
+            then (scope:scope-set-add lookup-scopes (nth (1- i) scopes))
+          do (let ((result (bt:binding-table-resolve table 'x lookup-scopes)))
+               (is (bt:resolution-bound-p result)
+                   "Should find binding at level ~D" i)
+               (is (string= (format nil "LEVEL-~D" i)
+                            (symbol-name
+                             (bt:scope-binding-value
+                              (bt:resolution-result-binding result))))
+                   "Should find correct binding at level ~D" i)))))
+
+(deftest resolution-many-overlapping-non-nested ()
+  "Resolution with many overlapping but not nested scope sets"
+  ;; Create scopes that overlap but form an ambiguous situation
+  (let* ((common (scope:make-scope-token))
+         (unique-scopes (loop repeat 5 collect (scope:make-scope-token)))
+         (table (bt:make-binding-table)))
+    ;; Create 5 bindings, each with the common scope + one unique scope
+    ;; x@{common, u1}, x@{common, u2}, ..., x@{common, u5}
+    (loop for i from 0 below 5
+          for u = (nth i unique-scopes)
+          do (setf table (bt:binding-table-add
+                          table 'x
+                          (make-scopes common u)
+                          (intern (format nil "BINDING-~D" i)))))
+    ;; Lookup with just common scope: ambiguous (5 equally-sized subsets)
+    (let ((result (bt:binding-table-resolve table 'x (make-scopes common))))
+      (is (bt:resolution-unbound-p result)
+          "Just common scope doesn't match any binding (not subset)"))
+    ;; Lookup with common + all unique: all 5 are subsets, all equally sized
+    (let* ((all-scopes (reduce #'scope:scope-set-add unique-scopes
+                               :initial-value (make-scopes common)))
+           (result (bt:binding-table-resolve table 'x all-scopes)))
+      (is (bt:resolution-ambiguous-p result)
+          "With all scopes, all 5 bindings are candidates")
+      (is (= 5 (length (bt:resolution-result-candidates result)))
+          "Should have 5 ambiguous candidates"))))
+
+(deftest resolution-chain-of-shadowing ()
+  "Resolution through a chain of shadowing bindings"
+  ;; Simulate: let x in let x in let x in ...
+  ;; Each level adds a scope, shadowing the previous binding
+  (let* ((scopes (loop repeat 5 collect (scope:make-scope-token)))
+         (table (bt:make-binding-table)))
+    ;; Build chain of bindings
+    (let ((accumulated (scope:empty-scope-set)))
+      (loop for i from 0 below 5
+            for s = (nth i scopes)
+            do (setf accumulated (scope:scope-set-add accumulated s))
+               (setf table (bt:binding-table-add
+                            table 'x accumulated
+                            (intern (format nil "SHADOW-~D" i))))))
+    ;; Lookup at the deepest level should find the innermost binding
+    (let* ((all-scopes (reduce #'scope:scope-set-add scopes
+                               :initial-value (scope:empty-scope-set)))
+           (result (bt:binding-table-resolve table 'x all-scopes)))
+      (is (bt:resolution-bound-p result)
+          "Should find innermost binding")
+      (is (string= "SHADOW-4"
+                   (symbol-name (bt:scope-binding-value
+                                 (bt:resolution-result-binding result))))
+          "Should be the last (innermost) binding"))))
+
+(deftest resolution-diamond-ambiguity ()
+  "Diamond-shaped scope sets create ambiguity"
+  ;; Create a diamond:
+  ;;       {top}
+  ;;      /     \
+  ;;  {left}   {right}
+  ;;      \     /
+  ;;      {bottom}
+  ;; Bindings at left and right, lookup at bottom
+  (let* ((top (scope:make-scope-token))
+         (left (scope:make-scope-token))
+         (right (scope:make-scope-token))
+         (bottom (scope:make-scope-token))
+         (table (bt:binding-table-add
+                 (bt:binding-table-add (bt:make-binding-table)
+                                        'x (make-scopes top left) :left-binding)
+                 'x (make-scopes top right) :right-binding))
+         ;; Lookup with all scopes
+         (all-scopes (make-scopes top left right bottom))
+         (result (bt:binding-table-resolve table 'x all-scopes)))
+    ;; Both bindings are subsets, both have same size -> ambiguous
+    (is (bt:resolution-ambiguous-p result)
+        "Diamond pattern creates ambiguity")
+    (is (= 2 (length (bt:resolution-result-candidates result))))))
+
+(deftest resolution-diamond-with-dominator ()
+  "Diamond with a dominating binding resolves unambiguously"
+  (let* ((top (scope:make-scope-token))
+         (left (scope:make-scope-token))
+         (right (scope:make-scope-token))
+         (bottom (scope:make-scope-token))
+         ;; Add bindings at left, right, and bottom (dominator)
+         (table (bt:binding-table-add
+                 (bt:binding-table-add
+                  (bt:binding-table-add (bt:make-binding-table)
+                                         'x (make-scopes top left) :left-binding)
+                  'x (make-scopes top right) :right-binding)
+                 'x (make-scopes top left right) :dominator))
+         (all-scopes (make-scopes top left right bottom))
+         (result (bt:binding-table-resolve table 'x all-scopes)))
+    ;; The dominator has more scopes than left or right
+    (is (bt:resolution-bound-p result)
+        "Dominator resolves ambiguity")
+    (is (eq :dominator
+            (bt:scope-binding-value (bt:resolution-result-binding result))))))
+
+(deftest resolution-empty-vs-nonempty ()
+  "Empty scope binding vs non-empty scope binding"
+  ;; x@{} vs x@{s1}
+  (let* ((s1 (scope:make-scope-token))
+         (table (bt:binding-table-add
+                 (bt:binding-table-add (bt:make-binding-table)
+                                        'x (scope:empty-scope-set) :empty-binding)
+                 'x (make-scopes s1) :s1-binding)))
+    ;; Lookup with empty scopes: only empty binding is subset
+    (let ((result1 (bt:binding-table-resolve table 'x (scope:empty-scope-set))))
+      (is (bt:resolution-bound-p result1))
+      (is (eq :empty-binding
+              (bt:scope-binding-value (bt:resolution-result-binding result1)))))
+    ;; Lookup with s1: both are subsets, but s1 is maximal
+    (let ((result2 (bt:binding-table-resolve table 'x (make-scopes s1))))
+      (is (bt:resolution-bound-p result2))
+      (is (eq :s1-binding
+              (bt:scope-binding-value (bt:resolution-result-binding result2)))))))
+
+(deftest resolution-many-bindings-same-name ()
+  "Binding table handles many bindings for the same name"
+  (let* ((scopes (loop repeat 20 collect (scope:make-scope-token)))
+         (table (bt:make-binding-table)))
+    ;; Create 20 bindings, each with a different single scope
+    (loop for i from 0 below 20
+          for s = (nth i scopes)
+          do (setf table (bt:binding-table-add
+                          table 'x (make-scopes s)
+                          (intern (format nil "BINDING-~D" i)))))
+    ;; Looking up with any single scope should find that binding
+    (loop for i from 0 below 20
+          for s = (nth i scopes)
+          do (let ((result (bt:binding-table-resolve table 'x (make-scopes s))))
+               (is (bt:resolution-bound-p result))
+               (is (string= (format nil "BINDING-~D" i)
+                            (symbol-name
+                             (bt:scope-binding-value
+                              (bt:resolution-result-binding result)))))))
+    ;; Looking up with all scopes: all 20 are subsets, all same size -> 20-way ambiguity
+    (let* ((all-scopes (reduce #'scope:scope-set-add scopes
+                               :initial-value (scope:empty-scope-set)))
+           (result (bt:binding-table-resolve table 'x all-scopes)))
+      (is (bt:resolution-ambiguous-p result))
+      (is (= 20 (length (bt:resolution-result-candidates result)))))))
+
+(deftest resolution-partial-overlap ()
+  "Bindings with partially overlapping scopes"
+  ;; x@{a,b} and x@{b,c}
+  ;; Lookup with {a,b,c} - both are subsets, neither is maximal subset of the other
+  (let* ((a (scope:make-scope-token))
+         (b (scope:make-scope-token))
+         (c (scope:make-scope-token))
+         (table (bt:binding-table-add
+                 (bt:binding-table-add (bt:make-binding-table)
+                                        'x (make-scopes a b) :ab-binding)
+                 'x (make-scopes b c) :bc-binding))
+         (result (bt:binding-table-resolve table 'x (make-scopes a b c))))
+    (is (bt:resolution-ambiguous-p result)
+        "Partial overlap creates ambiguity")
+    (is (= 2 (length (bt:resolution-result-candidates result))))))
