@@ -276,8 +276,7 @@
    The macro's captured reference has the binding's inside-scope.
    Even after re-definition, the captured reference still resolves
    to the original binding."
-  (let* ((ctx (defctx:syntax-local-make-definition-context))
-         (inside-scope (defctx:definition-context-inside-scope ctx)))
+  (let* ((ctx (defctx:syntax-local-make-definition-context)))
     ;; Step 1: Define first helper
     (let ((helper1-stx (defctx:definition-context-bind ctx 'helper :first-helper)))
       ;; Step 2: Macro captures reference to helper
@@ -369,7 +368,6 @@
    as 'from an earlier point in expansion'. Later bindings don't have
    this outside-scope, so there's a scope mismatch that prevents capture."
   (let* ((ctx (defctx:syntax-local-make-definition-context))
-         (inside-scope (defctx:definition-context-inside-scope ctx))
          (outside-scope (defctx:definition-context-outside-scope ctx)))
     ;; First binding: helper
     (let ((helper1-stx (defctx:definition-context-bind ctx 'helper :first-helper)))
@@ -394,7 +392,7 @@
                   (bt:resolution-ambiguous-p result))
               "Protected reference should trigger binding consideration"))))))
 
-(deftest nested-definition-contexts ()
+(deftest nested-context-inner-shadows-outer ()
   "Nested definition contexts properly shadow outer bindings.
 
    (coalton-toplevel
