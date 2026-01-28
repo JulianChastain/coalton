@@ -22,7 +22,8 @@
   (load "tests/parser/syntax-cst-tests.lisp")
   (load "tests/parser/hygienic-macro-tests.lisp")
   (load "tests/parser/hygienic-integration-tests.lisp")
-  (load "tests/parser/syntax-case-tests.lisp"))
+  (load "tests/parser/syntax-case-tests.lisp")
+  (load "tests/parser/definition-context-tests.lisp"))
 
 ;; Custom test runner that captures results
 (defun run-tests-with-summary (package-names)
@@ -79,5 +80,6 @@
                   coalton-impl/parser/syntax-cst-tests
                   coalton-impl/parser/hygienic-macro-tests
                   coalton-impl/parser/hygienic-integration-tests
-                  coalton/tests/parser/syntax-case-tests))))
+                  coalton/tests/parser/syntax-case-tests
+                  coalton-impl/parser/definition-context-tests))))
   (sb-ext:exit :code (if success 0 1)))
