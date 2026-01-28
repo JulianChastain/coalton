@@ -1,0 +1,95 @@
+name: Literate Build
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'web/**'
+      - 'coalton-web.asd'
+      - '.github/workflows/literate.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'web/**'
+      - 'coalton-web.asd'
+      - '.github/workflows/literate.yml'
+
+  workflow_dispatch:
+
+jobs:
+  tangle-verify:
+    name: Verify Tangle
+    runs-on: ubuntu-latest
+
+    permissions:
+      packages: read
+
+    container:
+      image: ghcr.io/coalton-lang/sbcl-base
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      env:
+        CL_SOURCE_REGISTRY: "/__w/coalton/coalton//"
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install TeX Live (for weaving)
+        run: |
+          apt-get update
+          apt-get install -y texlive-base texlive-latex-base
+
+      - name: Load CLWEB and verify tangle
+        run: |
+          cat <<EOF > verify-tangle.lisp
+          ;; Load CLWEB first
+          (ql:quickload :clweb)
+
+          ;; Attempt to load the literate Coalton system
+          ;; This will tangle and compile all .clw files
+          (handler-case
+              (progn
+                (ql:quickload :coalton-web)
+                (format t "~%Tangle verification: SUCCESS~%"))
+            (error (c)
+              (format *error-output* "~%Tangle verification: FAILED~%~A~%" c)
+              (uiop:quit 1)))
+          EOF
+          sbcl --non-interactive --load verify-tangle.lisp
+
+      - name: Weave documentation
+        run: |
+          cat <<EOF > weave-docs.lisp
+          (ql:quickload :clweb)
+
+          ;; Weave the algorithm module as a test
+          (handler-case
+              (progn
+                (clweb:weave "/__w/coalton/coalton/web/compiler/algorithm")
+                (format t "~%Weave: SUCCESS~%"))
+            (error (c)
+              (format *error-output* "~%Weave: FAILED~%~A~%" c)
+              (uiop:quit 1)))
+          EOF
+          sbcl --non-interactive --load weave-docs.lisp
+
+      - name: Compile TeX to PDF
+        working-directory: web/compiler
+        run: |
+          if [ -f algorithm.tex ]; then
+            pdflatex -interaction=nonstopmode algorithm.tex || true
+            echo "PDF generation attempted"
+          else
+            echo "No .tex file found (weave may have failed)"
+          fi
+
+      - name: Upload documentation artifacts
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: literate-docs
+          path: |
+            web/compiler/*.tex
+            web/compiler/*.pdf
+          retention-days: 7

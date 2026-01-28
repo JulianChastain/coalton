@@ -13,3 +13,21 @@ coverage-report/
 benchmarks/benchmarks-game/pidigits
 
 bench.json
+
+# Literate Programming (CLWEB)
+# The .clw files in web/ are the source of truth
+# Tangled .lisp files are generated during build
+
+# Tangled output in web/ directory
+web/**/*.lisp
+
+# TeX intermediate files from weaving
+web/**/*.tex
+web/**/*.aux
+web/**/*.log
+web/**/*.toc
+web/**/*.idx
+web/**/*.scn
+
+# Generated documentation (kept in doc/)
+doc/coalton-book.pdf
