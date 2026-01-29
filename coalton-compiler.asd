@@ -63,6 +63,7 @@
                              (:file "predicate")
                              (:file "type-errors")
                              (:file "unify")
+                             (:file "cl-types")        ; CL type system interface (must be before constrain)
                              (:file "constrain")       ; Constraint propagation
                              (:file "levels")          ; Level-based let-poly
                              (:file "simplify")        ; Type simplification

@@ -6,7 +6,8 @@
    #:coalton-impl/typechecker/types
    #:coalton-impl/typechecker/types-sub)
   (:local-nicknames
-   (#:util #:coalton-impl/util))
+   (#:util #:coalton-impl/util)
+   (#:cl-types #:coalton-impl/typechecker/cl-types))
   (:export
    #:simplify-type                      ; FUNCTION
    #:simplify-union                     ; FUNCTION
@@ -223,6 +224,10 @@ It recursively simplifies all parts of the type and applies:
     type)
 
   (:method ((type tgen))
+    type)
+
+  ;; ty-cl-type: return as-is (opaque wrapper)
+  (:method ((type cl-types:ty-cl-type))
     type))
 
 ;;;
@@ -277,7 +282,8 @@ Union and intersection are transparent to polarity."
                         :initial-value '(0 . 0)))
                (ty-top '(0 . 0))
                (ty-bot '(0 . 0))
-               (tgen '(0 . 0)))))
+               (tgen '(0 . 0))
+               (cl-types:ty-cl-type '(0 . 0)))))
     (let ((counts (count-in type positive)))
       (values (car counts) (cdr counts)))))
 
@@ -356,7 +362,8 @@ SUBSTITUTIONS is an alist of (tyvar-sub . replacement-type) pairs."
                 (make-ty-intersection :members (mapcar #'subst-in (ty-intersection-members ty))))
                (ty-top ty)
                (ty-bot ty)
-               (tgen ty))))
+               (tgen ty)
+               (cl-types:ty-cl-type ty))))
     (subst-in type)))
 
 ;;;
@@ -413,7 +420,8 @@ Returns a hash table mapping tyvar-sub IDs to lists of context paths."
                         :do (collect m (cons (cons :intersection i) path))))
                  (ty-top nil)
                  (ty-bot nil)
-                 (tgen nil))))
+                 (tgen nil)
+                 (cl-types:ty-cl-type nil))))
       (collect type nil)
       contexts)))
 
@@ -527,3 +535,117 @@ redundant because any value that satisfies B also satisfies A."
   ;; For now, just handle duplicates
   ;; More sophisticated supertype analysis could be added later
   (remove-duplicate-types members))
+
+;;;
+;;; CL Type Simplification
+;;;
+;;; Additional simplification rules for unions and intersections
+;;; that contain ty-cl-type members.
+;;;
+
+(defun simplify-union-with-cl-types (members)
+  "Simplify a union that may contain ty-cl-type members.
+
+Combines multiple ty-cl-type members into a single (OR ...) type
+and removes redundant types based on subtypep relationships."
+  (declare (type ty-list members))
+  (let ((cl-types nil)
+        (other-types nil))
+    ;; Separate CL types from other types
+    (dolist (m members)
+      (if (cl-types:ty-cl-type-p m)
+          (push (cl-types:ty-cl-type-specifier m) cl-types)
+          (push m other-types)))
+
+    (cond
+      ;; No CL types - return original members
+      ((null cl-types)
+       members)
+      ;; Only CL types
+      ((null other-types)
+       (if (= 1 (length cl-types))
+           (list (cl-types:make-ty-cl-type :specifier (first cl-types)))
+           ;; Combine into single (OR ...) CL type
+           (list (cl-types:make-ty-cl-type :specifier `(or ,@(nreverse cl-types))))))
+      ;; Mix of CL types and other types
+      (t
+       (let ((combined-cl (if (= 1 (length cl-types))
+                              (cl-types:make-ty-cl-type :specifier (first cl-types))
+                              (cl-types:make-ty-cl-type :specifier `(or ,@(nreverse cl-types))))))
+         (cons combined-cl (nreverse other-types)))))))
+
+(defun simplify-intersection-with-cl-types (members)
+  "Simplify an intersection that may contain ty-cl-type members.
+
+Combines multiple ty-cl-type members into a single (AND ...) type
+and detects empty intersections using subtypep."
+  (declare (type ty-list members))
+  (let ((cl-types nil)
+        (other-types nil))
+    ;; Separate CL types from other types
+    (dolist (m members)
+      (if (cl-types:ty-cl-type-p m)
+          (push (cl-types:ty-cl-type-specifier m) cl-types)
+          (push m other-types)))
+
+    (cond
+      ;; No CL types - return original members
+      ((null cl-types)
+       members)
+      ;; Only CL types
+      ((null other-types)
+       ;; Check if intersection is empty
+       (let ((combined-spec (if (= 1 (length cl-types))
+                                (first cl-types)
+                                `(and ,@(nreverse cl-types)))))
+         (multiple-value-bind (is-nil valid-p)
+             (cl:subtypep combined-spec nil)
+           (if (and valid-p is-nil)
+               ;; Empty intersection - return bottom type
+               (list +ty-bot+)
+               (list (cl-types:make-ty-cl-type :specifier combined-spec))))))
+      ;; Mix of CL types and other types
+      (t
+       (let* ((combined-spec (if (= 1 (length cl-types))
+                                 (first cl-types)
+                                 `(and ,@(nreverse cl-types))))
+              ;; Check if the CL part is empty
+              (combined-cl (multiple-value-bind (is-nil valid-p)
+                               (cl:subtypep combined-spec nil)
+                             (if (and valid-p is-nil)
+                                 +ty-bot+
+                                 (cl-types:make-ty-cl-type :specifier combined-spec)))))
+         (cons combined-cl (nreverse other-types)))))))
+
+(defun remove-cl-type-redundancies (members direction)
+  "Remove redundant types from MEMBERS using CL subtypep.
+
+DIRECTION is either :UNION or :INTERSECTION.
+- For unions: remove types that are subtypes of other members
+- For intersections: remove types that are supertypes of other members"
+  (declare (type ty-list members)
+           (type (member :union :intersection) direction))
+  (let ((result nil))
+    (dolist (m members)
+      (unless (some (lambda (other)
+                      (and (not (eq m other))
+                           (cond
+                             ;; Both are CL types: use subtypep
+                             ((and (cl-types:ty-cl-type-p m)
+                                   (cl-types:ty-cl-type-p other))
+                              (multiple-value-bind (subtype-p valid-p)
+                                  (ecase direction
+                                    (:union
+                                     ;; In union: m is redundant if m <= other
+                                     (cl:subtypep (cl-types:ty-cl-type-specifier m)
+                                                  (cl-types:ty-cl-type-specifier other)))
+                                    (:intersection
+                                     ;; In intersection: m is redundant if other <= m
+                                     (cl:subtypep (cl-types:ty-cl-type-specifier other)
+                                                  (cl-types:ty-cl-type-specifier m))))
+                                (and valid-p subtype-p)))
+                             ;; Otherwise, can't determine statically
+                             (t nil))))
+                    members)
+        (push m result)))
+    (nreverse result)))

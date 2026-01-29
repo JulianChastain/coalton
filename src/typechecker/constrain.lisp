@@ -9,7 +9,8 @@
    #:coalton-impl/typechecker/predicate
    #:coalton-impl/typechecker/type-errors)
   (:local-nicknames
-   (#:util #:coalton-impl/util))
+   (#:util #:coalton-impl/util)
+   (#:cl-types #:coalton-impl/typechecker/cl-types))
   (:export
    #:constrain                          ; FUNCTION
    #:constrain-equal                    ; FUNCTION
@@ -122,6 +123,10 @@
     nil)
 
   (:method ((var tyvar-sub) (type tgen))
+    nil)
+
+  ;; ty-cl-type contains no type variables
+  (:method ((var tyvar-sub) (type cl-types:ty-cl-type))
     nil))
 
 ;;;
@@ -292,7 +297,105 @@ The constraint propagation follows these rules:
     (error 'constraint-error :lhs lhs :rhs rhs))
 
   (:method ((lhs ty) (rhs tyvar))
-    (error 'constraint-error :lhs lhs :rhs rhs)))
+    (error 'constraint-error :lhs lhs :rhs rhs))
+
+  ;;
+  ;; ty-cl-type constraint methods
+  ;;
+  ;; CL types use cl:subtypep for subtype relationships
+
+  ;; ty-cl-type vs ty-cl-type: use cl:subtypep
+  (:method ((lhs cl-types:ty-cl-type) (rhs cl-types:ty-cl-type))
+    (multiple-value-bind (subtype-p valid-p)
+        (cl:subtypep (cl-types:ty-cl-type-specifier lhs)
+                     (cl-types:ty-cl-type-specifier rhs))
+      (cond
+        ;; Definitely a subtype
+        ((and valid-p subtype-p) t)
+        ;; Definitely not a subtype
+        ((and valid-p (not subtype-p))
+         (error 'constraint-error :lhs lhs :rhs rhs))
+        ;; Indeterminate - treat conservatively as error
+        (t
+         (error 'constraint-error :lhs lhs :rhs rhs)))))
+
+  ;; ty-cl-type vs tyvar-sub: add bounds
+  (:method ((lhs cl-types:ty-cl-type) (rhs tyvar-sub))
+    (add-lower-bound rhs lhs)
+    t)
+
+  (:method ((lhs tyvar-sub) (rhs cl-types:ty-cl-type))
+    (add-upper-bound lhs rhs)
+    t)
+
+  ;; ty-cl-type vs ty-top: always succeeds
+  (:method ((lhs cl-types:ty-cl-type) (rhs ty-top))
+    (declare (ignore lhs rhs))
+    t)
+
+  ;; ty-bot vs ty-cl-type: always succeeds
+  (:method ((lhs ty-bot) (rhs cl-types:ty-cl-type))
+    (declare (ignore lhs rhs))
+    t)
+
+  ;; ty-cl-type vs ty-union: check if subtype of any member
+  (:method ((lhs cl-types:ty-cl-type) (rhs ty-union))
+    ;; Try to find a member that lhs is a subtype of
+    (let ((matching (find-if (lambda (m)
+                               (handler-case
+                                   (progn (constrain lhs m) t)
+                                 (constraint-error () nil)))
+                             (ty-union-members rhs))))
+      (if matching
+          t
+          (error 'constraint-error :lhs lhs :rhs rhs))))
+
+  ;; ty-intersection vs ty-cl-type: some member must be subtype
+  (:method ((lhs ty-intersection) (rhs cl-types:ty-cl-type))
+    (let ((matching (find-if (lambda (m)
+                               (handler-case
+                                   (progn (constrain m rhs) t)
+                                 (constraint-error () nil)))
+                             (ty-intersection-members lhs))))
+      (if matching
+          t
+          (error 'constraint-error :lhs lhs :rhs rhs))))
+
+  ;; ty-cl-type vs ty-intersection: must be subtype of all members
+  (:method ((lhs cl-types:ty-cl-type) (rhs ty-intersection))
+    (dolist (member (ty-intersection-members rhs))
+      (constrain lhs member))
+    t)
+
+  ;; ty-union vs ty-cl-type: all members must be subtypes
+  (:method ((lhs ty-union) (rhs cl-types:ty-cl-type))
+    (dolist (member (ty-union-members lhs))
+      (constrain member rhs))
+    t)
+
+  ;; ty-cl-type vs tycon: check if CL type is subtype of Coalton type
+  (:method ((lhs cl-types:ty-cl-type) (rhs tycon))
+    (let ((rhs-cl (cl-types:ty->cl-type rhs)))
+      (multiple-value-bind (subtype-p valid-p)
+          (cl:subtypep (cl-types:ty-cl-type-specifier lhs) rhs-cl)
+        (cond
+          ((and valid-p subtype-p) t)
+          ((and valid-p (not subtype-p))
+           (error 'constraint-error :lhs lhs :rhs rhs))
+          ;; Indeterminate
+          (t (error 'constraint-error :lhs lhs :rhs rhs))))))
+
+  ;; tycon vs ty-cl-type: check if Coalton type is subtype of CL type
+  (:method ((lhs tycon) (rhs cl-types:ty-cl-type))
+    (let ((lhs-cl (cl-types:ty->cl-type lhs)))
+      (multiple-value-bind (subtype-p valid-p)
+          (cl:subtypep lhs-cl (cl-types:ty-cl-type-specifier rhs))
+        (cond
+          ((and valid-p subtype-p) t)
+          ((and valid-p (not subtype-p))
+           (error 'constraint-error :lhs lhs :rhs rhs))
+          ;; Indeterminate
+          (t (error 'constraint-error :lhs lhs :rhs rhs)))))))
 
 ;;;
 ;;; Equality constraint (bidirectional)
@@ -477,7 +580,23 @@ Returns a SUBSTITUTION-LIST for any regular tyvars that were unified.")
 
   ;; Default: error
   (:method ((type1 ty) (type2 ty))
-    (error 'unification-error :type1 type1 :type2 type2)))
+    (error 'unification-error :type1 type1 :type2 type2))
+
+  ;; ty-cl-type matching
+  (:method ((type1 cl-types:ty-cl-type) (type2 cl-types:ty-cl-type))
+    ;; CL types match if subtypep holds
+    (multiple-value-bind (subtype-p valid-p)
+        (cl:subtypep (cl-types:ty-cl-type-specifier type1)
+                     (cl-types:ty-cl-type-specifier type2))
+      (if (and valid-p subtype-p)
+          nil  ; No substitution needed
+          (error 'unification-error :type1 type1 :type2 type2))))
+
+  (:method ((type1 cl-types:ty-cl-type) (type2 ty-top))
+    nil)  ; CL type matches top
+
+  (:method ((type1 ty-bot) (type2 cl-types:ty-cl-type))
+    nil)) ; Bottom matches CL type
 
 (defun predicate-match-sub (pred1 pred2)
   "Match PRED1 to PRED2 using constraint propagation for tyvar-sub.

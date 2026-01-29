@@ -302,7 +302,8 @@
                (:module "typechecker"
                 :serial t
                 :components ((:file "lisp-type-tests")
-                             (:file "subtyping-tests")))
+                             (:file "subtyping-tests")
+                             (:file "cl-types-tests")))
                (:file "environment-persist-tests")
                (:file "coalton-tests")
                (:file "shortcut-tailcall-tests")
