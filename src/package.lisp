@@ -107,6 +107,14 @@
    #:handle                             ; Handle effects with resumption
    #:Pure)                              ; Pure effect (no effects)
 
+  ;; Delimited Continuations
+  (:export
+   #:reset                              ; Establish a continuation delimiter
+   #:shift                              ; Capture delimited continuation
+   #:call/cc                            ; Call with current continuation
+   #:Cont                               ; Continuation type
+   #:Prompt)                            ; Prompt/delimiter type marker
+
   ;; Macros
   (:export
    #:if

@@ -524,6 +524,97 @@ The constraint propagation follows these rules:
   ;; ty-bot vs ty-effect-op: always succeeds (bot is subtype of all)
   (:method ((lhs ty-bot) (rhs ty-effect-op))
     (declare (ignore lhs rhs))
+    t)
+
+  ;;
+  ;; Delimited continuation type constraint methods
+  ;;
+  ;; Continuation types follow these subtyping rules:
+  ;; (Cont :r1 :a1) <= (Cont :r2 :a2) iff:
+  ;;   :r2 <= :r1 (contravariant in answer type)
+  ;;   :a1 <= :a2 (covariant in result type)
+  ;;
+  ;; This is because continuations consume answer types and produce results.
+
+  ;; ty-cont vs ty-cont
+  (:method ((lhs ty-cont) (rhs ty-cont))
+    ;; Contravariant in answer type
+    (constrain (ty-cont-answer-type rhs) (ty-cont-answer-type lhs))
+    ;; Covariant in result type
+    (constrain (ty-cont-result-type lhs) (ty-cont-result-type rhs))
+    t)
+
+  ;; ty-cont vs tyvar-sub: add bounds
+  (:method ((lhs ty-cont) (rhs tyvar-sub))
+    (add-lower-bound rhs lhs)
+    t)
+
+  (:method ((lhs tyvar-sub) (rhs ty-cont))
+    (add-upper-bound lhs rhs)
+    t)
+
+  ;; ty-cont vs ty-top: always succeeds
+  (:method ((lhs ty-cont) (rhs ty-top))
+    (declare (ignore lhs rhs))
+    t)
+
+  ;; ty-bot vs ty-cont: always succeeds
+  (:method ((lhs ty-bot) (rhs ty-cont))
+    (declare (ignore lhs rhs))
+    t)
+
+  ;; ty-prompt vs ty-prompt: must have same answer type
+  (:method ((lhs ty-prompt) (rhs ty-prompt))
+    (constrain-equal (ty-prompt-answer-type lhs) (ty-prompt-answer-type rhs))
+    t)
+
+  ;; ty-prompt vs tyvar-sub: add bounds
+  (:method ((lhs ty-prompt) (rhs tyvar-sub))
+    (add-lower-bound rhs lhs)
+    t)
+
+  (:method ((lhs tyvar-sub) (rhs ty-prompt))
+    (add-upper-bound lhs rhs)
+    t)
+
+  ;; ty-prompt vs ty-top: always succeeds
+  (:method ((lhs ty-prompt) (rhs ty-top))
+    (declare (ignore lhs rhs))
+    t)
+
+  ;; ty-bot vs ty-prompt: always succeeds
+  (:method ((lhs ty-bot) (rhs ty-prompt))
+    (declare (ignore lhs rhs))
+    t)
+
+  ;; ty-cps-fn vs ty-cps-fn
+  ;; (CPS :a1 :r1) <= (CPS :a2 :r2) iff:
+  ;;   :a2 <= :a1 (contravariant in domain)
+  ;;   :r1 <= :r2 (covariant in continuation answer)
+  (:method ((lhs ty-cps-fn) (rhs ty-cps-fn))
+    ;; Contravariant in domain
+    (constrain (ty-cps-fn-domain rhs) (ty-cps-fn-domain lhs))
+    ;; Covariant in continuation answer
+    (constrain (ty-cps-fn-continuation-answer lhs) (ty-cps-fn-continuation-answer rhs))
+    t)
+
+  ;; ty-cps-fn vs tyvar-sub: add bounds
+  (:method ((lhs ty-cps-fn) (rhs tyvar-sub))
+    (add-lower-bound rhs lhs)
+    t)
+
+  (:method ((lhs tyvar-sub) (rhs ty-cps-fn))
+    (add-upper-bound lhs rhs)
+    t)
+
+  ;; ty-cps-fn vs ty-top: always succeeds
+  (:method ((lhs ty-cps-fn) (rhs ty-top))
+    (declare (ignore lhs rhs))
+    t)
+
+  ;; ty-bot vs ty-cps-fn: always succeeds
+  (:method ((lhs ty-bot) (rhs ty-cps-fn))
+    (declare (ignore lhs rhs))
     t))
 
 ;;;

@@ -131,6 +131,23 @@
    #:node-handle-expr                   ; READER
    #:node-handle-branches               ; READER
    #:node-handle-return                 ; READER
+   ;; Delimited continuations
+   #:node-reset                         ; STRUCT
+   #:make-node-reset                    ; CONSTRUCTOR
+   #:node-reset-body                    ; READER
+   #:node-shift                         ; STRUCT
+   #:make-node-shift                    ; CONSTRUCTOR
+   #:node-shift-cont-var                ; READER
+   #:node-shift-body                    ; READER
+   #:node-call/cc                       ; STRUCT
+   #:make-node-call/cc                  ; CONSTRUCTOR
+   #:node-call/cc-cont-var              ; READER
+   #:node-call/cc-body                  ; READER
+   #:node-cps-app                       ; STRUCT
+   #:make-node-cps-app                  ; CONSTRUCTOR
+   #:node-cps-app-rator                 ; READER
+   #:node-cps-app-rands                 ; READER
+   #:node-cps-app-cont                  ; READER
    #:node-block                         ; STRUCT
    #:make-node-block                    ; CONSTRUCTOR
    #:node-block-name                    ; READER
@@ -417,6 +434,66 @@ RETURN: Optional handler for the final return value (a node)"
   (expr     (util:required 'expr)     :type node                    :read-only t)
   (branches (util:required 'branches) :type node-handle-branch-list :read-only t)
   (return   nil                       :type (or null node)          :read-only t))
+
+;;;
+;;; Delimited Continuation AST Nodes
+;;;
+;;; These nodes support first-class delimited continuations using shift/reset.
+;;; At runtime, these compile to cl-cont's with-call/cc, let/cc, and funcall.
+;;;
+
+(defstruct (node-reset (:include node))
+  "A reset (prompt/delimiter) for delimited continuations.
+
+Reset delimits the extent of continuation capture. Continuations captured
+by shift within the body will only extend up to this reset boundary.
+
+(reset body) establishes a continuation delimiter around body.
+
+BODY: The expression to evaluate with a continuation delimiter"
+  (body (util:required 'body) :type node :read-only t))
+
+(defstruct (node-shift (:include node))
+  "Capture the current delimited continuation.
+
+Shift captures the continuation up to the nearest enclosing reset and
+binds it to the given variable. The captured continuation can be invoked
+zero, once, or multiple times.
+
+(shift k body) captures continuation k and evaluates body.
+When k is invoked with a value, control returns to the shift point.
+
+CONT-VAR: Variable name to bind the captured continuation
+BODY: Expression to evaluate with the captured continuation"
+  (cont-var (util:required 'cont-var) :type parser:identifier :read-only t)
+  (body     (util:required 'body)     :type node              :read-only t))
+
+(defstruct (node-call/cc (:include node))
+  "Call with current continuation (non-delimited).
+
+This is the traditional call/cc that captures the entire continuation.
+It's provided for completeness but delimited continuations (shift/reset)
+are generally preferred.
+
+(call/cc (fn (k) body)) captures the full continuation as k.
+
+CONT-VAR: Variable name to bind the captured continuation
+BODY: Expression to evaluate with the captured continuation"
+  (cont-var (util:required 'cont-var) :type parser:identifier :read-only t)
+  (body     (util:required 'body)     :type node              :read-only t))
+
+(defstruct (node-cps-app (:include node))
+  "Apply a CPS-transformed function.
+
+This represents calling a function that is in CPS form and expects
+a continuation as its final argument. Used for interop with CPS code.
+
+RATOR: The CPS function to apply
+RANDS: Arguments to the function (not including continuation)
+CONT: The continuation to pass to the function"
+  (rator (util:required 'rator) :type node      :read-only t)
+  (rands (util:required 'rands) :type node-list :read-only t)
+  (cont  (util:required 'cont)  :type node      :read-only t))
 
 (defstruct (node-block (:include node))
   "A return target, used for explicit returns in functions"

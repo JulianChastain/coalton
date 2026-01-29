@@ -60,6 +60,21 @@
    #:make-exception-effect              ; FUNCTION
    #:pure-effect-p                      ; FUNCTION
    #:effect-row-p                       ; FUNCTION
+   ;; Delimited continuation types
+   #:ty-cont                            ; STRUCT
+   #:make-ty-cont                       ; CONSTRUCTOR
+   #:ty-cont-answer-type                ; ACCESSOR
+   #:ty-cont-result-type                ; ACCESSOR
+   #:ty-cont-p                          ; FUNCTION
+   #:ty-prompt                          ; STRUCT
+   #:make-ty-prompt                     ; CONSTRUCTOR
+   #:ty-prompt-answer-type              ; ACCESSOR
+   #:ty-prompt-p                        ; FUNCTION
+   #:ty-cps-fn                          ; STRUCT
+   #:make-ty-cps-fn                     ; CONSTRUCTOR
+   #:ty-cps-fn-domain                   ; ACCESSOR
+   #:ty-cps-fn-continuation-answer      ; ACCESSOR
+   #:ty-cps-fn-p                        ; FUNCTION
    ))
 
 (in-package #:coalton-impl/typechecker/types-sub)
@@ -726,3 +741,200 @@ Effect rows are displayed as:
 
 (defmethod pprint-ty-extended (stream (type ty-effect-op))
   (pprint-ty-effect-op stream type))
+
+;;;
+;;; Delimited Continuation Types
+;;;
+;;; These types support first-class delimited continuations (shift/reset).
+;;; The implementation uses cl-cont at runtime for the actual continuation
+;;; capture and invocation.
+;;;
+
+(defstruct (ty-cont (:include ty))
+  "A delimited continuation type.
+
+A continuation type (Cont :r :a) represents a computation that:
+- Eventually produces a value of type :a (the answer type)
+- Is delimited by a reset with answer type :r
+
+The type tracks both the local answer type and the outer answer type
+to support answer-type modification (shift can change the answer type
+of the enclosing reset).
+
+This corresponds to the type of continuations captured by shift:
+(shift k body) captures k : (:a -> :r) in a Cont :r :r context.
+
+ANSWER-TYPE: The type of the overall reset computation
+RESULT-TYPE: The type of the value produced by the continuation"
+  (answer-type (util:required 'answer-type) :type ty :read-only t)
+  (result-type (util:required 'result-type) :type ty :read-only t))
+
+(defstruct (ty-prompt (:include ty))
+  "A prompt/delimiter type marker for delimited continuations.
+
+Prompts (delimiters) mark boundaries for continuation capture.
+The type tracks what answer type the delimited computation produces.
+
+ANSWER-TYPE: The type of value the delimited block produces"
+  (answer-type (util:required 'answer-type) :type ty :read-only t))
+
+(defstruct (ty-cps-fn (:include ty))
+  "A CPS (Continuation-Passing Style) function type.
+
+A CPS function type (CPS :a :r) represents a function that:
+- Takes a value of type :a
+- Invokes a continuation expecting type :r
+- Never returns normally (control is transferred via continuation)
+
+This is used for representing functions that are always in CPS form,
+enabling optimization and composition with delimited continuations.
+
+DOMAIN: Input type
+CONTINUATION-ANSWER: Type expected by the continuation"
+  (domain (util:required 'domain) :type ty :read-only t)
+  (continuation-answer (util:required 'continuation-answer) :type ty :read-only t))
+
+;;;
+;;; Methods for continuation types
+;;;
+
+(defmethod kind-of ((type ty-cont))
+  +kstar+)
+
+(defmethod kind-of ((type ty-prompt))
+  +kstar+)
+
+(defmethod kind-of ((type ty-cps-fn))
+  +kstar+)
+
+(defmethod ty= ((type1 ty-cont) (type2 ty-cont))
+  (and (ty= (ty-cont-answer-type type1) (ty-cont-answer-type type2))
+       (ty= (ty-cont-result-type type1) (ty-cont-result-type type2))))
+
+(defmethod ty= ((type1 ty-prompt) (type2 ty-prompt))
+  (ty= (ty-prompt-answer-type type1) (ty-prompt-answer-type type2)))
+
+(defmethod ty= ((type1 ty-cps-fn) (type2 ty-cps-fn))
+  (and (ty= (ty-cps-fn-domain type1) (ty-cps-fn-domain type2))
+       (ty= (ty-cps-fn-continuation-answer type1)
+            (ty-cps-fn-continuation-answer type2))))
+
+(defmethod type-variables ((type ty-cont))
+  (remove-duplicates
+   (append (type-variables (ty-cont-answer-type type))
+           (type-variables (ty-cont-result-type type)))
+   :test #'equalp
+   :from-end t))
+
+(defmethod type-variables ((type ty-prompt))
+  (type-variables (ty-prompt-answer-type type)))
+
+(defmethod type-variables ((type ty-cps-fn))
+  (remove-duplicates
+   (append (type-variables (ty-cps-fn-domain type))
+           (type-variables (ty-cps-fn-continuation-answer type)))
+   :test #'equalp
+   :from-end t))
+
+(defmethod apply-ksubstitution (subs (type ty-cont))
+  (make-ty-cont
+   :alias (mapcar (lambda (alias) (apply-ksubstitution subs alias)) (ty-alias type))
+   :answer-type (apply-ksubstitution subs (ty-cont-answer-type type))
+   :result-type (apply-ksubstitution subs (ty-cont-result-type type))))
+
+(defmethod apply-ksubstitution (subs (type ty-prompt))
+  (make-ty-prompt
+   :alias (mapcar (lambda (alias) (apply-ksubstitution subs alias)) (ty-alias type))
+   :answer-type (apply-ksubstitution subs (ty-prompt-answer-type type))))
+
+(defmethod apply-ksubstitution (subs (type ty-cps-fn))
+  (make-ty-cps-fn
+   :alias (mapcar (lambda (alias) (apply-ksubstitution subs alias)) (ty-alias type))
+   :domain (apply-ksubstitution subs (ty-cps-fn-domain type))
+   :continuation-answer (apply-ksubstitution subs (ty-cps-fn-continuation-answer type))))
+
+(defmethod kind-variables-generic% ((type ty-cont))
+  (append
+   (kind-variables-generic% (ty-cont-answer-type type))
+   (kind-variables-generic% (ty-cont-result-type type))))
+
+(defmethod kind-variables-generic% ((type ty-prompt))
+  (kind-variables-generic% (ty-prompt-answer-type type)))
+
+(defmethod kind-variables-generic% ((type ty-cps-fn))
+  (append
+   (kind-variables-generic% (ty-cps-fn-domain type))
+   (kind-variables-generic% (ty-cps-fn-continuation-answer type))))
+
+(defmethod instantiate (types (type ty-cont))
+  (make-ty-cont
+   :alias (mapcar (lambda (alias) (instantiate types alias)) (ty-alias type))
+   :answer-type (instantiate types (ty-cont-answer-type type))
+   :result-type (instantiate types (ty-cont-result-type type))))
+
+(defmethod instantiate (types (type ty-prompt))
+  (make-ty-prompt
+   :alias (mapcar (lambda (alias) (instantiate types alias)) (ty-alias type))
+   :answer-type (instantiate types (ty-prompt-answer-type type))))
+
+(defmethod instantiate (types (type ty-cps-fn))
+  (make-ty-cps-fn
+   :alias (mapcar (lambda (alias) (instantiate types alias)) (ty-alias type))
+   :domain (instantiate types (ty-cps-fn-domain type))
+   :continuation-answer (instantiate types (ty-cps-fn-continuation-answer type))))
+
+;;;
+;;; Pretty printing for continuation types
+;;;
+
+(defun pprint-ty-cont (stream type)
+  "Pretty print a continuation type as (Cont :r :a)."
+  (declare (type stream stream)
+           (type ty-cont type))
+  (write-string "(Cont " stream)
+  (pprint-ty stream (ty-cont-answer-type type))
+  (write-char #\space stream)
+  (pprint-ty stream (ty-cont-result-type type))
+  (write-char #\) stream))
+
+(defun pprint-ty-prompt (stream type)
+  "Pretty print a prompt type as (Prompt :r)."
+  (declare (type stream stream)
+           (type ty-prompt type))
+  (write-string "(Prompt " stream)
+  (pprint-ty stream (ty-prompt-answer-type type))
+  (write-char #\) stream))
+
+(defun pprint-ty-cps-fn (stream type)
+  "Pretty print a CPS function type as (CPS :a :r)."
+  (declare (type stream stream)
+           (type ty-cps-fn type))
+  (write-string "(CPS " stream)
+  (pprint-ty stream (ty-cps-fn-domain type))
+  (write-char #\space stream)
+  (pprint-ty stream (ty-cps-fn-continuation-answer type))
+  (write-char #\) stream))
+
+(defmethod print-object ((type ty-cont) stream)
+  (if *print-readably*
+      (call-next-method)
+      (pprint-ty-cont stream type)))
+
+(defmethod print-object ((type ty-prompt) stream)
+  (if *print-readably*
+      (call-next-method)
+      (pprint-ty-prompt stream type)))
+
+(defmethod print-object ((type ty-cps-fn) stream)
+  (if *print-readably*
+      (call-next-method)
+      (pprint-ty-cps-fn stream type)))
+
+(defmethod pprint-ty-extended (stream (type ty-cont))
+  (pprint-ty-cont stream type))
+
+(defmethod pprint-ty-extended (stream (type ty-prompt))
+  (pprint-ty-prompt stream type))
+
+(defmethod pprint-ty-extended (stream (type ty-cps-fn))
+  (pprint-ty-cps-fn stream type))

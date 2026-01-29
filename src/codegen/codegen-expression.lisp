@@ -407,6 +407,70 @@ compiles to:
                 ;; Without return handler
                 expr-code)))))
 
+  ;;
+  ;; Delimited Continuations Codegen
+  ;;
+  ;; These nodes compile to cl-cont's with-call/cc and let/cc primitives.
+  ;; cl-cont provides delimited continuations via CPS transformation.
+  ;;
+
+  (:method ((node node-reset) env)
+    "Generate code for a reset (prompt/delimiter) expression.
+
+Reset establishes a continuation delimiter. Any shift within the body
+will capture the continuation only up to this point.
+
+(reset body) compiles to:
+  (cl-cont:with-call/cc body)
+
+which establishes the CPS context for continuation capture."
+    (declare (type tc:environment env))
+    `(cl-cont:with-call/cc
+       ,(codegen-expression (node-reset-body node) env)))
+
+  (:method ((node node-shift) env)
+    "Generate code for a shift (capture continuation) expression.
+
+Shift captures the continuation up to the nearest enclosing reset.
+The captured continuation can be invoked zero, once, or multiple times.
+
+(shift k body) compiles to:
+  (cl-cont:let/cc k body)
+
+The continuation k is a function that, when called with a value, returns
+that value to the shift point."
+    (declare (type tc:environment env))
+    `(cl-cont:let/cc ,(node-shift-cont-var node)
+       ,(codegen-expression (node-shift-body node) env)))
+
+  (:method ((node node-call/cc) env)
+    "Generate code for call/cc (non-delimited continuation capture).
+
+call/cc captures the entire current continuation. This is provided
+for completeness, but delimited continuations are preferred.
+
+(call/cc k body) compiles to:
+  (cl-cont:let/cc k body)
+
+Note: In cl-cont, let/cc works for both delimited and undelimited
+contexts depending on whether there's an enclosing with-call/cc."
+    (declare (type tc:environment env))
+    `(cl-cont:let/cc ,(node-call/cc-cont-var node)
+       ,(codegen-expression (node-call/cc-body node) env)))
+
+  (:method ((node node-cps-app) env)
+    "Generate code for a CPS function application.
+
+This applies a CPS-transformed function with an explicit continuation.
+Used for interoperability with CPS code.
+
+The function is called with its arguments plus the continuation."
+    (declare (type tc:environment env))
+    `(funcall ,(codegen-expression (node-cps-app-rator node) env)
+              ,@(mapcar (lambda (rand) (codegen-expression rand env))
+                        (node-cps-app-rands node))
+              ,(codegen-expression (node-cps-app-cont node) env)))
+
   (:method ((node node-resume-to) env)
     (let* ((restart-name
              (tc:lisp-type (node-type (node-resume-to-expr node)) env))

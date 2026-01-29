@@ -125,6 +125,18 @@
    #:node-handle-expr                   ; ACCESSOR
    #:node-handle-branches               ; ACCESSOR
    #:node-handle-return                 ; ACCESSOR
+   ;; Delimited continuation nodes
+   #:node-reset                         ; STRUCT
+   #:make-node-reset                    ; CONSTRUCTOR
+   #:node-reset-body                    ; ACCESSOR
+   #:node-shift                         ; STRUCT
+   #:make-node-shift                    ; CONSTRUCTOR
+   #:node-shift-cont-var                ; ACCESSOR
+   #:node-shift-body                    ; ACCESSOR
+   #:node-call/cc                       ; STRUCT
+   #:make-node-call/cc                  ; CONSTRUCTOR
+   #:node-call/cc-cont-var              ; ACCESSOR
+   #:node-call/cc-body                  ; ACCESSOR
    #:node-application                   ; STRUCT
    #:make-node-application              ; CONSTRUCTOR
    #:node-application-rator             ; ACCESSOR
@@ -444,6 +456,48 @@ RETURN: Optional handler for the final return value"
   (expr     (util:required 'expr)     :type node                    :read-only t)
   (branches (util:required 'branches) :type node-handle-branch-list :read-only t)
   (return   nil                       :type (or null node-body)     :read-only t))
+
+;;;
+;;; Delimited Continuation Nodes
+;;;
+
+(defstruct (node-reset
+            (:include node)
+            (:copier nil))
+  "A reset (prompt/delimiter) for delimited continuations.
+
+Reset delimits the extent of continuation capture. Continuations captured
+by shift within the body will only extend up to this reset boundary.
+
+BODY: The expression to evaluate with a continuation delimiter"
+  (body (util:required 'body) :type node-body :read-only t))
+
+(defstruct (node-shift
+            (:include node)
+            (:copier nil))
+  "Capture the current delimited continuation.
+
+Shift captures the continuation up to the nearest enclosing reset and
+binds it to the given variable. The captured continuation can be invoked
+zero, once, or multiple times.
+
+CONT-VAR: Variable name to bind the captured continuation
+BODY: Expression to evaluate with the captured continuation"
+  (cont-var (util:required 'cont-var) :type node-variable :read-only t)
+  (body     (util:required 'body)     :type node-body     :read-only t))
+
+(defstruct (node-call/cc
+            (:include node)
+            (:copier nil))
+  "Call with current continuation (non-delimited).
+
+This is the traditional call/cc that captures the entire continuation.
+Delimited continuations (shift/reset) are generally preferred.
+
+CONT-VAR: Variable name to bind the captured continuation
+BODY: Expression to evaluate with the captured continuation"
+  (cont-var (util:required 'cont-var) :type node-variable :read-only t)
+  (body     (util:required 'body)     :type node-body     :read-only t))
 
 (defstruct (node-application
             (:include node)
@@ -778,6 +832,34 @@ RETURN: Optional handler for the final return value"
    :branches (tc:apply-substitution subs (node-handle-branches node))
    :return (when (node-handle-return node)
              (tc:apply-substitution subs (node-handle-return node)))))
+
+;;; Delimited Continuation apply-substitution methods
+
+(defmethod tc:apply-substitution (subs (node node-reset))
+  (declare (type tc:substitution-list subs)
+           (values node-reset))
+  (make-node-reset
+   :type (tc:apply-substitution subs (node-type node))
+   :location (source:location node)
+   :body (tc:apply-substitution subs (node-reset-body node))))
+
+(defmethod tc:apply-substitution (subs (node node-shift))
+  (declare (type tc:substitution-list subs)
+           (values node-shift))
+  (make-node-shift
+   :type (tc:apply-substitution subs (node-type node))
+   :location (source:location node)
+   :cont-var (tc:apply-substitution subs (node-shift-cont-var node))
+   :body (tc:apply-substitution subs (node-shift-body node))))
+
+(defmethod tc:apply-substitution (subs (node node-call/cc))
+  (declare (type tc:substitution-list subs)
+           (values node-call/cc))
+  (make-node-call/cc
+   :type (tc:apply-substitution subs (node-type node))
+   :location (source:location node)
+   :cont-var (tc:apply-substitution subs (node-call/cc-cont-var node))
+   :body (tc:apply-substitution subs (node-call/cc-body node))))
 
 (defmethod tc:apply-substitution (subs (node node-or))
   (declare (type tc:substitution-list subs)

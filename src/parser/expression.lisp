@@ -125,6 +125,18 @@
    #:node-handle-expr                   ; ACCESSOR
    #:node-handle-branches               ; ACCESSOR
    #:node-handle-return                 ; ACCESSOR
+   ;; Delimited continuation nodes
+   #:node-reset                         ; STRUCT
+   #:make-node-reset                    ; CONSTRUCTOR
+   #:node-reset-body                    ; ACCESSOR
+   #:node-shift                         ; STRUCT
+   #:make-node-shift                    ; CONSTRUCTOR
+   #:node-shift-cont-var                ; ACCESSOR
+   #:node-shift-body                    ; ACCESSOR
+   #:node-call/cc                       ; STRUCT
+   #:make-node-call/cc                  ; CONSTRUCTOR
+   #:node-call/cc-cont-var              ; ACCESSOR
+   #:node-call/cc-body                  ; ACCESSOR
    #:node-application                   ; STRUCT
    #:make-node-application              ; CONSTRUCTOR
    #:node-application-rator             ; ACCESSOR
@@ -711,6 +723,52 @@ RETURN: Optional handler for the final return value"
   (branches (util:required 'branches) :type node-handle-branch-list :read-only t)
   (return   nil                       :type (or null node-body)     :read-only t))
 
+;;;
+;;; Delimited Continuation Nodes
+;;;
+
+(defstruct (node-reset
+            (:include node)
+            (:copier nil))
+  "A reset (prompt/delimiter) for delimited continuations.
+
+Reset delimits the extent of continuation capture. Continuations captured
+by shift within the body will only extend up to this reset boundary.
+
+(reset body) establishes a continuation delimiter around body."
+  (body (util:required 'body) :type node-body :read-only t))
+
+(defstruct (node-shift
+            (:include node)
+            (:copier nil))
+  "Capture the current delimited continuation.
+
+Shift captures the continuation up to the nearest enclosing reset and
+binds it to the given variable. The captured continuation can be invoked
+zero, once, or multiple times.
+
+(shift k body) captures continuation k and evaluates body.
+
+CONT-VAR: Variable name to bind the captured continuation
+BODY: Expression to evaluate with the captured continuation"
+  (cont-var (util:required 'cont-var) :type node-variable :read-only t)
+  (body     (util:required 'body)     :type node-body     :read-only t))
+
+(defstruct (node-call/cc
+            (:include node)
+            (:copier nil))
+  "Call with current continuation (non-delimited).
+
+This is the traditional call/cc that captures the entire continuation.
+Delimited continuations (shift/reset) are generally preferred.
+
+(call/cc (fn (k) body)) captures the full continuation as k.
+
+CONT-VAR: Variable name to bind the captured continuation
+BODY: Expression to evaluate with the captured continuation"
+  (cont-var (util:required 'cont-var) :type node-variable :read-only t)
+  (body     (util:required 'body)     :type node-body     :read-only t))
+
 (defun parse-expression (form source)
   (declare (type cst:cst form)
            (values node &optional))
@@ -961,6 +1019,70 @@ RETURN: Optional handler for the final return value"
         :branches (nreverse branches)
         :return return-handler
         :location (form-location source form))))
+
+    ;;
+    ;; Delimited Continuations: reset, shift, call/cc
+    ;;
+
+    ((and (cst:atom (cst:first form))
+          (eq 'coalton:reset (cst:raw (cst:first form))))
+
+     ;; (reset)
+     (unless (cst:consp (cst:rest form))
+       (parse-error "Malformed reset expression"
+                    (note-end source (cst:first form) "expected body")))
+
+     (make-node-reset
+      :body (parse-body (cst:rest form) (cst:first form) source)
+      :location (form-location source form)))
+
+    ((and (cst:atom (cst:first form))
+          (eq 'coalton:shift (cst:raw (cst:first form))))
+
+     ;; (shift)
+     (unless (cst:consp (cst:rest form))
+       (parse-error "Malformed shift expression"
+                    (note-end source (cst:first form) "expected continuation variable")))
+
+     ;; (shift k)
+     (unless (cst:consp (cst:rest (cst:rest form)))
+       (parse-error "Malformed shift expression"
+                    (note-end source (cst:second form) "expected body")))
+
+     ;; Validate continuation variable
+     (unless (and (cst:atom (cst:second form))
+                  (symbolp (cst:raw (cst:second form))))
+       (parse-error "Malformed shift expression"
+                    (note source (cst:second form) "expected continuation variable name")))
+
+     (make-node-shift
+      :cont-var (parse-variable (cst:second form) source)
+      :body (parse-body (cst:nthrest 2 form) (cst:second form) source)
+      :location (form-location source form)))
+
+    ((and (cst:atom (cst:first form))
+          (eq 'coalton:call/cc (cst:raw (cst:first form))))
+
+     ;; (call/cc)
+     (unless (cst:consp (cst:rest form))
+       (parse-error "Malformed call/cc expression"
+                    (note-end source (cst:first form) "expected continuation variable")))
+
+     ;; (call/cc k)
+     (unless (cst:consp (cst:rest (cst:rest form)))
+       (parse-error "Malformed call/cc expression"
+                    (note-end source (cst:second form) "expected body")))
+
+     ;; Validate continuation variable
+     (unless (and (cst:atom (cst:second form))
+                  (symbolp (cst:raw (cst:second form))))
+       (parse-error "Malformed call/cc expression"
+                    (note source (cst:second form) "expected continuation variable name")))
+
+     (make-node-call/cc
+      :cont-var (parse-variable (cst:second form) source)
+      :body (parse-body (cst:nthrest 2 form) (cst:second form) source)
+      :location (form-location source form)))
 
     ((and (cst:atom (cst:first form))
           (eq 'coalton:let (cst:raw (cst:first form))))

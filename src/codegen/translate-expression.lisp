@@ -884,6 +884,52 @@ Returns a `node'.")
                                      :body out-node))))
                 :finally (return out-node))))))
 
+  ;;
+  ;; Delimited Continuation Translations
+  ;;
+
+  (:method ((expr tc:node-reset) ctx env)
+    (declare (type pred-context ctx)
+             (type tc:environment env)
+             (values node))
+
+    (let ((qual-ty (tc:node-type expr)))
+      (assert (null (tc:qualified-ty-predicates qual-ty)))
+
+      (make-node-reset
+       :type (tc:qualified-ty-type qual-ty)
+       :body (translate-expression (tc:node-reset-body expr) ctx env))))
+
+  (:method ((expr tc:node-shift) ctx env)
+    (declare (type pred-context ctx)
+             (type tc:environment env)
+             (values node))
+
+    (let ((qual-ty (tc:node-type expr)))
+      (assert (null (tc:qualified-ty-predicates qual-ty)))
+
+      ;; Get the continuation variable name
+      (let ((cont-var-name (tc:node-variable-name (tc:node-shift-cont-var expr))))
+        (make-node-shift
+         :type (tc:qualified-ty-type qual-ty)
+         :cont-var cont-var-name
+         :body (translate-expression (tc:node-shift-body expr) ctx env)))))
+
+  (:method ((expr tc:node-call/cc) ctx env)
+    (declare (type pred-context ctx)
+             (type tc:environment env)
+             (values node))
+
+    (let ((qual-ty (tc:node-type expr)))
+      (assert (null (tc:qualified-ty-predicates qual-ty)))
+
+      ;; Get the continuation variable name
+      (let ((cont-var-name (tc:node-variable-name (tc:node-call/cc-cont-var expr))))
+        (make-node-call/cc
+         :type (tc:qualified-ty-type qual-ty)
+         :cont-var cont-var-name
+         :body (translate-expression (tc:node-call/cc-body expr) ctx env)))))
+
   (:method ((node tc:node-do) ctx env)
     (declare (type pred-context ctx)
              (type tc:environment env)
