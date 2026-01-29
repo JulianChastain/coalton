@@ -5,7 +5,6 @@
 .DS_Store
 *~
 
-=======
 # Qlot - project-local dependencies
 .qlot/
 .bundle-libs/

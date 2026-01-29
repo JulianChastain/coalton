@@ -1313,7 +1313,11 @@ Rebound to NIL parsing an anonymous FN.")
 
        (source:with-context
            (:macro "Error occurs within macro context. Source locations may be imprecise")
-         (parse-expression (expand-macro form source) source))))
+         (parse-expression
+          (if *use-hygienic-macros*
+              (expand-macro-hygienic-wrapper form source)
+              (expand-macro form source))
+          source))))
 
     ;;
     ;; Function Application
