@@ -42,6 +42,24 @@
    #:ty-bot-kind                        ; ACCESSOR
    #:ty-bot-p                           ; FUNCTION
    #:+ty-bot+                           ; CONSTANT
+   ;; Effecting function type (for algebraic effects)
+   #:ty-effecting-fn                    ; STRUCT
+   #:make-ty-effecting-fn               ; CONSTRUCTOR
+   #:ty-effecting-fn-domain             ; ACCESSOR
+   #:ty-effecting-fn-codomain           ; ACCESSOR
+   #:ty-effecting-fn-effects            ; ACCESSOR
+   #:ty-effecting-fn-p                  ; FUNCTION
+   ;; Effect operation type
+   #:ty-effect-op                       ; STRUCT
+   #:make-ty-effect-op                  ; CONSTRUCTOR
+   #:ty-effect-op-name                  ; ACCESSOR
+   #:ty-effect-op-request-type          ; ACCESSOR
+   #:ty-effect-op-response-type         ; ACCESSOR
+   #:ty-effect-op-p                     ; FUNCTION
+   ;; Effect utilities
+   #:make-exception-effect              ; FUNCTION
+   #:pure-effect-p                      ; FUNCTION
+   #:effect-row-p                       ; FUNCTION
    ))
 
 (in-package #:coalton-impl/typechecker/types-sub)
@@ -192,6 +210,98 @@ KIND specifies what kind of types this is the bottom of (usually +kstar+)."
   :documentation "The canonical bottom type for kind *.")
 
 ;;;
+;;; Effecting function type (for algebraic effects)
+;;;
+
+(defstruct (ty-effecting-fn (:include ty))
+  "A function type with effect tracking.
+
+An effecting function type (A -> B ! E) represents a function that:
+- Takes a value of type A (the DOMAIN)
+- Returns a value of type B (the CODOMAIN)
+- May perform effects described by E (the EFFECTS)
+
+The EFFECTS field is an effect row, which is either:
+- ty-bot (Pure): No effects, equivalent to regular function
+- ty-effect-op: A single effect operation
+- ty-union of effect operations: Multiple possible effects
+- tyvar-sub: Polymorphic effect variable
+
+Effect rows follow these subtyping rules:
+- E1 <= (E1 | E2)  (subset relationship)
+- Pure <= E for all E (pure functions are subtypes of effectful ones)
+- (-> A B ! E1) <= (-> A B ! E2) when E1 <= E2 (covariant effects)
+
+This structure enables tracking effects through the type system while
+maintaining backwards compatibility with existing pure function types."
+  (domain   (util:required 'domain)   :type ty :read-only t)
+  (codomain (util:required 'codomain) :type ty :read-only t)
+  (effects  (util:required 'effects)  :type ty :read-only t))
+
+;;;
+;;; Effect operation type
+;;;
+
+(defstruct (ty-effect-op (:include ty))
+  "An effect operation type.
+
+Effect operations are the primitive building blocks of algebraic effects.
+Each operation represents a request that can be handled by an effect handler.
+
+NAME: A symbol identifying the effect (e.g., 'STATE.GET, 'CONSOLE.READ-LINE)
+REQUEST-TYPE: The type of data sent with the request
+RESPONSE-TYPE: The type of data returned when the handler resumes
+
+For example, a State effect might have operations:
+- (ty-effect-op 'STATE.GET Unit :s)       ; get : () -> :s ! State
+- (ty-effect-op 'STATE.PUT :s Unit)       ; put : :s -> Unit ! State
+
+Exceptions are a special case where RESPONSE-TYPE is ty-bot (⊥) because
+throwing an exception never returns normally:
+- (ty-effect-op 'PARSE-ERROR String ⊥)    ; never resumes
+
+Effect operations participate in effect rows via ty-union, enabling
+functions to declare multiple possible effects."
+  (name          (util:required 'name)          :type symbol :read-only t)
+  (request-type  (util:required 'request-type)  :type ty     :read-only t)
+  (response-type (util:required 'response-type) :type ty     :read-only t))
+
+(defun make-exception-effect (name payload-type)
+  "Create an exception effect (non-resumable).
+
+Exceptions are effect operations where the response type is ⊥ (bottom),
+indicating that throwing the exception never returns normally.
+
+NAME: Symbol identifying the exception type
+PAYLOAD-TYPE: Type of data carried by the exception
+
+This maps to Common Lisp's ERROR function at runtime."
+  (make-ty-effect-op :name name
+                     :request-type payload-type
+                     :response-type +ty-bot+))
+
+(defun pure-effect-p (effects)
+  "Check if EFFECTS represents a pure (effect-free) computation.
+
+Pure effects are represented by ty-bot (⊥), the identity for effect union.
+A function with pure effects is equivalent to a regular function type."
+  (ty-bot-p effects))
+
+(defun effect-row-p (type)
+  "Check if TYPE is a valid effect row.
+
+Valid effect rows are:
+- ty-bot (Pure): No effects
+- ty-effect-op: Single effect
+- ty-union of effect ops/rows: Multiple effects
+- tyvar-sub: Effect variable (polymorphic)"
+  (or (ty-bot-p type)
+      (ty-effect-op-p type)
+      (and (ty-union-p type)
+           (every #'effect-row-p (ty-union-members type)))
+      (tyvar-sub-p type)))
+
+;;;
 ;;; Methods for new type structures
 ;;;
 
@@ -215,6 +325,14 @@ KIND specifies what kind of types this is the bottom of (usually +kstar+)."
 
 (defmethod kind-of ((type ty-bot))
   (ty-bot-kind type))
+
+(defmethod kind-of ((type ty-effecting-fn))
+  ;; Effecting function type has kind * (it's a concrete type)
+  +kstar+)
+
+(defmethod kind-of ((type ty-effect-op))
+  ;; Effect operations have kind * (they're types in effect rows)
+  +kstar+)
 
 ;;;
 ;;; Type equality for new types
@@ -251,6 +369,18 @@ The scope set check enables hygienic type variable binding in macros."
                   (some (lambda (t2) (ty= t1 t2)) m2))
                 m1))))
 
+(defmethod ty= ((type1 ty-effecting-fn) (type2 ty-effecting-fn))
+  "Two effecting function types are equal if domain, codomain, and effects are equal."
+  (and (ty= (ty-effecting-fn-domain type1) (ty-effecting-fn-domain type2))
+       (ty= (ty-effecting-fn-codomain type1) (ty-effecting-fn-codomain type2))
+       (ty= (ty-effecting-fn-effects type1) (ty-effecting-fn-effects type2))))
+
+(defmethod ty= ((type1 ty-effect-op) (type2 ty-effect-op))
+  "Two effect operations are equal if they have the same name and types."
+  (and (eq (ty-effect-op-name type1) (ty-effect-op-name type2))
+       (ty= (ty-effect-op-request-type type1) (ty-effect-op-request-type type2))
+       (ty= (ty-effect-op-response-type type1) (ty-effect-op-response-type type2))))
+
 ;;;
 ;;; Type variables extraction
 ;;;
@@ -282,6 +412,21 @@ The scope set check enables hygienic type variable binding in macros."
 
 (defmethod type-variables ((type ty-bot))
   nil)
+
+(defmethod type-variables ((type ty-effecting-fn))
+  (remove-duplicates
+   (append (type-variables (ty-effecting-fn-domain type))
+           (type-variables (ty-effecting-fn-codomain type))
+           (type-variables (ty-effecting-fn-effects type)))
+   :test #'equalp
+   :from-end t))
+
+(defmethod type-variables ((type ty-effect-op))
+  (remove-duplicates
+   (append (type-variables (ty-effect-op-request-type type))
+           (type-variables (ty-effect-op-response-type type)))
+   :test #'equalp
+   :from-end t))
 
 ;;;
 ;;; Kind substitution application
@@ -321,6 +466,20 @@ The scope set check enables hygienic type variable binding in macros."
    :alias (mapcar (lambda (alias) (apply-ksubstitution subs alias)) (ty-alias type))
    :kind (apply-ksubstitution subs (ty-bot-kind type))))
 
+(defmethod apply-ksubstitution (subs (type ty-effecting-fn))
+  (make-ty-effecting-fn
+   :alias (mapcar (lambda (alias) (apply-ksubstitution subs alias)) (ty-alias type))
+   :domain (apply-ksubstitution subs (ty-effecting-fn-domain type))
+   :codomain (apply-ksubstitution subs (ty-effecting-fn-codomain type))
+   :effects (apply-ksubstitution subs (ty-effecting-fn-effects type))))
+
+(defmethod apply-ksubstitution (subs (type ty-effect-op))
+  (make-ty-effect-op
+   :alias (mapcar (lambda (alias) (apply-ksubstitution subs alias)) (ty-alias type))
+   :name (ty-effect-op-name type)
+   :request-type (apply-ksubstitution subs (ty-effect-op-request-type type))
+   :response-type (apply-ksubstitution subs (ty-effect-op-response-type type))))
+
 ;;;
 ;;; Kind variables extraction
 ;;;
@@ -342,6 +501,17 @@ The scope set check enables hygienic type variable binding in macros."
 
 (defmethod kind-variables-generic% ((type ty-bot))
   (kind-variables-generic% (ty-bot-kind type)))
+
+(defmethod kind-variables-generic% ((type ty-effecting-fn))
+  (append
+   (kind-variables-generic% (ty-effecting-fn-domain type))
+   (kind-variables-generic% (ty-effecting-fn-codomain type))
+   (kind-variables-generic% (ty-effecting-fn-effects type))))
+
+(defmethod kind-variables-generic% ((type ty-effect-op))
+  (append
+   (kind-variables-generic% (ty-effect-op-request-type type))
+   (kind-variables-generic% (ty-effect-op-response-type type))))
 
 ;;;
 ;;; Type instantiation
@@ -366,6 +536,20 @@ The scope set check enables hygienic type variable binding in macros."
 
 (defmethod instantiate (types (type ty-bot))
   type)
+
+(defmethod instantiate (types (type ty-effecting-fn))
+  (make-ty-effecting-fn
+   :alias (mapcar (lambda (alias) (instantiate types alias)) (ty-alias type))
+   :domain (instantiate types (ty-effecting-fn-domain type))
+   :codomain (instantiate types (ty-effecting-fn-codomain type))
+   :effects (instantiate types (ty-effecting-fn-effects type))))
+
+(defmethod instantiate (types (type ty-effect-op))
+  (make-ty-effect-op
+   :alias (mapcar (lambda (alias) (instantiate types alias)) (ty-alias type))
+   :name (ty-effect-op-name type)
+   :request-type (instantiate types (ty-effect-op-request-type type))
+   :response-type (instantiate types (ty-effect-op-response-type type))))
 
 ;;;
 ;;; Pretty printing
@@ -422,6 +606,64 @@ The scope set check enables hygienic type variable binding in macros."
            (ignore type))
   (write-string (if settings:*coalton-print-unicode* "⊥" "Bot") stream))
 
+(defun pprint-ty-effecting-fn (stream type)
+  "Pretty print an effecting function type.
+
+Uses Koka-style syntax: (A -> B ! E)
+When effects are pure (ty-bot), hides the effect annotation for cleaner output."
+  (declare (type stream stream)
+           (type ty-effecting-fn type))
+  (write-string "(" stream)
+  (pprint-ty stream (ty-effecting-fn-domain type))
+  (write-string (if settings:*coalton-print-unicode*
+                    " → "
+                    " -> ")
+                stream)
+  (pprint-ty stream (ty-effecting-fn-codomain type))
+  ;; Only show effects if not pure
+  (let ((effects (ty-effecting-fn-effects type)))
+    (unless (pure-effect-p effects)
+      (write-string " ! " stream)
+      (pprint-effect-row stream effects)))
+  (write-string ")" stream))
+
+(defun pprint-effect-row (stream effects)
+  "Pretty print an effect row.
+
+Effect rows are displayed as:
+- Pure effects (ty-bot): 'Pure' or hidden
+- Single effect: effect name
+- Union of effects: (E1 | E2 | ...)"
+  (declare (type stream stream)
+           (type ty effects))
+  (cond
+    ((ty-bot-p effects)
+     (write-string "Pure" stream))
+    ((ty-effect-op-p effects)
+     (write (ty-effect-op-name effects) :stream stream))
+    ((ty-union-p effects)
+     ;; Print as (E1 | E2 | ...)
+     (write-string "(" stream)
+     (loop :for (member . rest) :on (ty-union-members effects)
+           :do (pprint-effect-row stream member)
+           :when rest :do (write-string " | " stream))
+     (write-string ")" stream))
+    ((tyvar-sub-p effects)
+     ;; Effect variable - print like type variable
+     (pprint-tyvar-sub stream effects))
+    (t
+     ;; Fallback - use generic printing
+     (pprint-ty stream effects))))
+
+(defun pprint-ty-effect-op (stream type)
+  "Pretty print an effect operation type."
+  (declare (type stream stream)
+           (type ty-effect-op type))
+  (format stream "(Effect ~S ~A ~A)"
+          (ty-effect-op-name type)
+          (ty-effect-op-request-type type)
+          (ty-effect-op-response-type type)))
+
 (defmethod print-object ((type tyvar-sub) stream)
   (if *print-readably*
       (call-next-method)
@@ -447,6 +689,16 @@ The scope set check enables hygienic type variable binding in macros."
       (call-next-method)
       (pprint-ty-bot stream type)))
 
+(defmethod print-object ((type ty-effecting-fn) stream)
+  (if *print-readably*
+      (call-next-method)
+      (pprint-ty-effecting-fn stream type)))
+
+(defmethod print-object ((type ty-effect-op) stream)
+  (if *print-readably*
+      (call-next-method)
+      (pprint-ty-effect-op stream type)))
+
 ;;;
 ;;; Integration with pprint-ty
 ;;;
@@ -468,3 +720,9 @@ The scope set check enables hygienic type variable binding in macros."
 
 (defmethod pprint-ty-extended (stream (type ty-bot))
   (pprint-ty-bot stream type))
+
+(defmethod pprint-ty-extended (stream (type ty-effecting-fn))
+  (pprint-ty-effecting-fn stream type))
+
+(defmethod pprint-ty-extended (stream (type ty-effect-op))
+  (pprint-ty-effect-op stream type))

@@ -38,6 +38,16 @@
   (declare (type symbol label))
   (alexandria:format-symbol :keyword "~a-BLOCK" label))
 
+(defun effect-condition-name (effect-name)
+  "Generate the Common Lisp condition name for an effect operation.
+
+Effect operations are represented at runtime as CL conditions.
+The condition name is derived from the effect operation name."
+  (declare (type symbol effect-name))
+  ;; Use the effect name directly as the condition name
+  ;; The condition should be defined by define-effect
+  effect-name)
+
 (defgeneric codegen-expression (node env)
   (:method ((node node-literal) env)
     (declare (type tc:environment env)
@@ -309,6 +319,93 @@
 
   (:method ((node node-throw) env)
     `(error ,(codegen-expression (node-throw-expr node) env)))
+
+  ;;
+  ;; Algebraic Effects Codegen
+  ;;
+
+  (:method ((node node-perform) env)
+    "Generate code for performing an effect operation.
+
+Effect operations are compiled to Common Lisp signals with restarts:
+- SIGNAL signals the effect condition
+- The handler can INVOKE-RESTART 'RESUME to continue with a value
+
+(perform EFFECT.OP arg) compiles to:
+  (let ((result nil))
+    (signal 'effect-condition :arg arg)
+    result)
+
+The handler will set RESULT via a restart and then continue."
+    (declare (type tc:environment env))
+    (let* ((effect-name (node-perform-effect node))
+           (condition-name (effect-condition-name effect-name))
+           (result-var (gensym "EFFECT-RESULT"))
+           (arg-code (when (node-perform-arg node)
+                       (codegen-expression (node-perform-arg node) env))))
+      ;; Generate code that signals the effect
+      ;; The handler is expected to invoke the RESUME restart with the result
+      `(let ((,result-var nil))
+         (restart-case
+             (signal ',condition-name
+                     ,@(when arg-code `(:arg ,arg-code)))
+           (resume (value)
+             (setf ,result-var value)))
+         ,result-var)))
+
+  (:method ((node node-handle) env)
+    "Generate code for handling effect operations with resumption support.
+
+Effect handlers are compiled to Common Lisp's HANDLER-BIND + RESTART-CASE:
+- HANDLER-BIND catches signals and decides how to handle them
+- The handler can call (invoke-restart 'resume value) to continue
+
+(handle expr
+  (EFFECT.OP (resume) body...)
+  (return (x) return-body...))
+
+compiles to:
+  (block handle-block
+    (handler-bind
+      ((effect-condition
+        (lambda (c)
+          (let ((resume (lambda (v) (invoke-restart 'resume v))))
+            body...))))
+      (let ((result expr))
+        return-body...)))"
+    (declare (type tc:environment env))
+    (let* ((block-label (gensym "HANDLE-BLOCK"))
+           (result-var (gensym "HANDLE-RESULT"))
+           (handlers
+             (loop :for branch :in (node-handle-branches node)
+                   :for effect-name := (node-handle-branch-effect branch)
+                   :for condition-name := (effect-condition-name effect-name)
+                   :for resume-var := (node-handle-branch-resume branch)
+                   :for handler-body := (codegen-expression
+                                         (node-handle-branch-body branch) env)
+                   :collect
+                   `(,condition-name
+                     (lambda (c)
+                       (declare (ignorable c))
+                       ,(if resume-var
+                            ;; With resumption: provide resume function
+                            `(let ((,resume-var
+                                     (lambda (value)
+                                       (invoke-restart 'resume value))))
+                               (declare (ignorable ,resume-var))
+                               ,handler-body)
+                            ;; Without resumption: just run body
+                            handler-body)))))
+           (expr-code (codegen-expression (node-handle-expr node) env))
+           (return-handler (node-handle-return node)))
+      `(block ,block-label
+         (handler-bind ,handlers
+           ,(if return-handler
+                ;; With return handler
+                `(let ((,result-var ,expr-code))
+                   ,(codegen-expression return-handler env))
+                ;; Without return handler
+                expr-code)))))
 
   (:method ((node node-resume-to) env)
     (let* ((restart-name

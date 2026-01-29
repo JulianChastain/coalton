@@ -115,6 +115,22 @@
    #:node-resume-to                     ; STRUCT
    #:make-node-resume-to                ; CONSTRUCTOR
    #:node-resume-to-expr                ; READER
+   ;; Algebraic effects
+   #:node-perform                       ; STRUCT
+   #:make-node-perform                  ; CONSTRUCTOR
+   #:node-perform-effect                ; READER
+   #:node-perform-arg                   ; READER
+   #:node-handle-branch                 ; STRUCT
+   #:make-node-handle-branch            ; CONSTRUCTOR
+   #:node-handle-branch-effect          ; READER
+   #:node-handle-branch-resume          ; READER
+   #:node-handle-branch-body            ; READER
+   #:node-handle-branch-list            ; TYPE
+   #:node-handle                        ; STRUCT
+   #:make-node-handle                   ; CONSTRUCTOR
+   #:node-handle-expr                   ; READER
+   #:node-handle-branches               ; READER
+   #:node-handle-return                 ; READER
    #:node-block                         ; STRUCT
    #:make-node-block                    ; CONSTRUCTOR
    #:node-block-name                    ; READER
@@ -362,6 +378,45 @@ call to (break)."
 (defstruct (node-resume-to (:include node))
   "A node that invokes a resumption, if any exists."
   (expr (util:required 'expr) :type node :read-only t))
+
+;;;
+;;; Algebraic Effects AST Nodes
+;;;
+
+(defstruct (node-perform (:include node))
+  "Perform an effect operation.
+
+EFFECT: The effect operation symbol (e.g., STATE.GET, CONSOLE.READ-LINE)
+ARG: Optional argument to the effect operation (may be nil)"
+  (effect (util:required 'effect) :type symbol         :read-only t)
+  (arg    nil                     :type (or null node) :read-only t))
+
+(defstruct node-handle-branch
+  "A branch in an effect handler.
+
+EFFECT: The effect operation being handled
+RESUME: Variable name for the resumption function (or nil for non-resumable)
+BODY: The handler body (a node, already compiled from parser node-body)"
+  (effect (util:required 'effect) :type symbol           :read-only t)
+  (resume nil                     :type (or null symbol) :read-only t)
+  (body   (util:required 'body)   :type node             :read-only t))
+
+(defun node-handle-branch-list-p (x)
+  (and (alexandria:proper-list-p x)
+       (every #'node-handle-branch-p x)))
+
+(deftype node-handle-branch-list ()
+  '(satisfies node-handle-branch-list-p))
+
+(defstruct (node-handle (:include node))
+  "Handle effect operations with resumption support.
+
+EXPR: The expression whose effects are being handled
+BRANCHES: List of node-handle-branch for effect handlers
+RETURN: Optional handler for the final return value (a node)"
+  (expr     (util:required 'expr)     :type node                    :read-only t)
+  (branches (util:required 'branches) :type node-handle-branch-list :read-only t)
+  (return   nil                       :type (or null node)          :read-only t))
 
 (defstruct (node-block (:include node))
   "A return target, used for explicit returns in functions"

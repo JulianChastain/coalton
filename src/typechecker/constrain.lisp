@@ -127,7 +127,18 @@
 
   ;; ty-cl-type contains no type variables
   (:method ((var tyvar-sub) (type cl-types:ty-cl-type))
-    nil))
+    nil)
+
+  ;; ty-effecting-fn: check domain, codomain, and effects
+  (:method ((var tyvar-sub) (type ty-effecting-fn))
+    (or (occurs-in-p var (ty-effecting-fn-domain type))
+        (occurs-in-p var (ty-effecting-fn-codomain type))
+        (occurs-in-p var (ty-effecting-fn-effects type))))
+
+  ;; ty-effect-op: check request and response types
+  (:method ((var tyvar-sub) (type ty-effect-op))
+    (or (occurs-in-p var (ty-effect-op-request-type type))
+        (occurs-in-p var (ty-effect-op-response-type type)))))
 
 ;;;
 ;;; Bound addition with propagation
@@ -395,7 +406,125 @@ The constraint propagation follows these rules:
           ((and valid-p (not subtype-p))
            (error 'constraint-error :lhs lhs :rhs rhs))
           ;; Indeterminate
-          (t (error 'constraint-error :lhs lhs :rhs rhs)))))))
+          (t (error 'constraint-error :lhs lhs :rhs rhs))))))
+
+  ;;
+  ;; Effecting function type constraint methods
+  ;;
+  ;; Effecting functions follow these subtyping rules:
+  ;; (A -> B ! E1) <= (C -> D ! E2) iff:
+  ;;   C <= A (contravariant domain)
+  ;;   B <= D (covariant codomain)
+  ;;   E1 <= E2 (covariant effects)
+
+  ;; ty-effecting-fn vs ty-effecting-fn
+  (:method ((lhs ty-effecting-fn) (rhs ty-effecting-fn))
+    ;; Contravariant in domain
+    (constrain (ty-effecting-fn-domain rhs) (ty-effecting-fn-domain lhs))
+    ;; Covariant in codomain
+    (constrain (ty-effecting-fn-codomain lhs) (ty-effecting-fn-codomain rhs))
+    ;; Covariant in effects
+    (constrain (ty-effecting-fn-effects lhs) (ty-effecting-fn-effects rhs))
+    t)
+
+  ;; ty-effecting-fn vs regular function type (tapp)
+  ;; A pure effecting function can be treated as a regular function
+  (:method ((lhs ty-effecting-fn) (rhs tapp))
+    (when (function-type-p rhs)
+      ;; Pure effecting function can be subtype of regular function
+      (unless (pure-effect-p (ty-effecting-fn-effects lhs))
+        ;; Non-pure function cannot be subtype of pure function
+        (error 'constraint-error :lhs lhs :rhs rhs))
+      ;; Contravariant in domain
+      (constrain (function-type-from rhs) (ty-effecting-fn-domain lhs))
+      ;; Covariant in codomain
+      (constrain (ty-effecting-fn-codomain lhs) (function-type-to rhs))
+      (return-from constrain t))
+    ;; Not a function type
+    (error 'constraint-error :lhs lhs :rhs rhs))
+
+  ;; Regular function type (tapp) vs ty-effecting-fn
+  ;; A regular function can be treated as a pure effecting function
+  (:method ((lhs tapp) (rhs ty-effecting-fn))
+    (when (function-type-p lhs)
+      ;; Regular function is implicitly pure, so effect constraint is E1 = Pure <= E2
+      ;; Pure <= any effect row
+      (constrain +ty-bot+ (ty-effecting-fn-effects rhs))
+      ;; Contravariant in domain
+      (constrain (ty-effecting-fn-domain rhs) (function-type-from lhs))
+      ;; Covariant in codomain
+      (constrain (function-type-to lhs) (ty-effecting-fn-codomain rhs))
+      (return-from constrain t))
+    ;; Not a function type
+    (error 'constraint-error :lhs lhs :rhs rhs))
+
+  ;; ty-effecting-fn vs tyvar-sub: add bounds
+  (:method ((lhs ty-effecting-fn) (rhs tyvar-sub))
+    (add-lower-bound rhs lhs)
+    t)
+
+  (:method ((lhs tyvar-sub) (rhs ty-effecting-fn))
+    (add-upper-bound lhs rhs)
+    t)
+
+  ;; ty-effecting-fn vs ty-top: always succeeds
+  (:method ((lhs ty-effecting-fn) (rhs ty-top))
+    (declare (ignore lhs rhs))
+    t)
+
+  ;; ty-bot vs ty-effecting-fn: always succeeds
+  (:method ((lhs ty-bot) (rhs ty-effecting-fn))
+    (declare (ignore lhs rhs))
+    t)
+
+  ;;
+  ;; Effect operation constraint methods
+  ;;
+  ;; Effect operations are comparable only by name equality
+  ;; (different effects are distinct, no subtyping between them)
+
+  ;; ty-effect-op vs ty-effect-op: must have same name
+  (:method ((lhs ty-effect-op) (rhs ty-effect-op))
+    (unless (eq (ty-effect-op-name lhs) (ty-effect-op-name rhs))
+      (error 'constraint-error :lhs lhs :rhs rhs))
+    ;; Same effect: check request and response types are equal
+    (constrain-equal (ty-effect-op-request-type lhs)
+                     (ty-effect-op-request-type rhs))
+    (constrain-equal (ty-effect-op-response-type lhs)
+                     (ty-effect-op-response-type rhs))
+    t)
+
+  ;; Effect rows: effect operations are subtypes of unions containing them
+  ;; ty-effect-op <= ty-union: check if effect is in the union
+  (:method ((lhs ty-effect-op) (rhs ty-union))
+    ;; Effect is subtype of union if it matches any member
+    (let ((matching (find-if (lambda (m)
+                               (handler-case
+                                   (progn (constrain lhs m) t)
+                                 (constraint-error () nil)))
+                             (ty-union-members rhs))))
+      (if matching
+          t
+          (error 'constraint-error :lhs lhs :rhs rhs))))
+
+  ;; ty-effect-op vs tyvar-sub: add bounds
+  (:method ((lhs ty-effect-op) (rhs tyvar-sub))
+    (add-lower-bound rhs lhs)
+    t)
+
+  (:method ((lhs tyvar-sub) (rhs ty-effect-op))
+    (add-upper-bound lhs rhs)
+    t)
+
+  ;; ty-effect-op vs ty-top: always succeeds (effect is a type)
+  (:method ((lhs ty-effect-op) (rhs ty-top))
+    (declare (ignore lhs rhs))
+    t)
+
+  ;; ty-bot vs ty-effect-op: always succeeds (bot is subtype of all)
+  (:method ((lhs ty-bot) (rhs ty-effect-op))
+    (declare (ignore lhs rhs))
+    t))
 
 ;;;
 ;;; Equality constraint (bidirectional)
@@ -596,7 +725,43 @@ Returns a SUBSTITUTION-LIST for any regular tyvars that were unified.")
     nil)  ; CL type matches top
 
   (:method ((type1 ty-bot) (type2 cl-types:ty-cl-type))
-    nil)) ; Bottom matches CL type
+    nil) ; Bottom matches CL type
+
+  ;; ty-effecting-fn: match structurally
+  (:method ((type1 ty-effecting-fn) (type2 ty-effecting-fn))
+    (let ((s1 (match-sub (ty-effecting-fn-domain type1)
+                         (ty-effecting-fn-domain type2)))
+          (s2 (match-sub (ty-effecting-fn-codomain type1)
+                         (ty-effecting-fn-codomain type2)))
+          (s3 (match-sub (ty-effecting-fn-effects type1)
+                         (ty-effecting-fn-effects type2))))
+      (merge-substitution-lists s1 (merge-substitution-lists s2 s3))))
+
+  ;; ty-effect-op: must have same name, then match types
+  (:method ((type1 ty-effect-op) (type2 ty-effect-op))
+    (unless (eq (ty-effect-op-name type1) (ty-effect-op-name type2))
+      (error 'unification-error :type1 type1 :type2 type2))
+    (let ((s1 (match-sub (ty-effect-op-request-type type1)
+                         (ty-effect-op-request-type type2)))
+          (s2 (match-sub (ty-effect-op-response-type type1)
+                         (ty-effect-op-response-type type2))))
+      (merge-substitution-lists s1 s2)))
+
+  ;; ty-effect-op vs ty-top: matches
+  (:method ((type1 ty-effect-op) (type2 ty-top))
+    nil)
+
+  ;; ty-bot vs ty-effect-op: matches
+  (:method ((type1 ty-bot) (type2 ty-effect-op))
+    nil)
+
+  ;; ty-effecting-fn vs ty-top: matches
+  (:method ((type1 ty-effecting-fn) (type2 ty-top))
+    nil)
+
+  ;; ty-bot vs ty-effecting-fn: matches
+  (:method ((type1 ty-bot) (type2 ty-effecting-fn))
+    nil))
 
 (defun predicate-match-sub (pred1 pred2)
   "Match PRED1 to PRED2 using constraint propagation for tyvar-sub.

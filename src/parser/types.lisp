@@ -37,10 +37,28 @@
    #:qualified-ty-predicates            ; ACCESSOR
    #:qualified-ty-type                  ; ACCESSOR
    #:qualified-ty-list                  ; TYPE
+   ;; Effecting function type
+   #:ty-effecting                       ; STRUCT
+   #:make-ty-effecting                  ; CONSTRUCTOR
+   #:ty-effecting-p                     ; FUNCTION
+   #:ty-effecting-domain                ; ACCESSOR
+   #:ty-effecting-codomain              ; ACCESSOR
+   #:ty-effecting-effects               ; ACCESSOR
+   ;; Effect row types
+   #:ty-effect-union                    ; STRUCT
+   #:make-ty-effect-union               ; CONSTRUCTOR
+   #:ty-effect-union-p                  ; FUNCTION
+   #:ty-effect-union-members            ; ACCESSOR
+   ;; Effect operation reference
+   #:ty-effect-ref                      ; STRUCT
+   #:make-ty-effect-ref                 ; CONSTRUCTOR
+   #:ty-effect-ref-p                    ; FUNCTION
+   #:ty-effect-ref-name                 ; ACCESSOR
    #:flatten-type                       ; FUNCTION
    #:parse-qualified-type               ; FUNCTION
    #:parse-type                         ; FUNCTION
    #:parse-predicate                    ; FUNCTION
+   #:parse-effect-row                   ; FUNCTION
    ))
 
 (in-package #:coalton-impl/parser/types)
@@ -108,6 +126,39 @@
   (from (util:required 'from) :type ty :read-only t)
   ;; The type argument
   (to   (util:required 'to)   :type ty :read-only t))
+
+;;;
+;;; Effecting function types (for algebraic effects)
+;;;
+;;; Syntax: (A -> B ! E)
+;;; Where E is an effect row: Pure | EffectName | (E1 | E2 | ...)
+;;;
+
+(defstruct (ty-effecting (:include ty)
+                         (:copier nil))
+  "A function type with effect tracking.
+
+Represents (A -> B ! E) where:
+- DOMAIN is the input type A
+- CODOMAIN is the output type B
+- EFFECTS is the effect row E"
+  (domain   (util:required 'domain)   :type ty :read-only t)
+  (codomain (util:required 'codomain) :type ty :read-only t)
+  (effects  (util:required 'effects)  :type ty :read-only t))
+
+(defstruct (ty-effect-union (:include ty)
+                            (:copier nil))
+  "A union of effects in an effect row.
+
+Represents (E1 | E2 | ...) where MEMBERS is a list of effect types."
+  (members (util:required 'members) :type ty-list :read-only t))
+
+(defstruct (ty-effect-ref (:include ty)
+                          (:copier nil))
+  "A reference to a named effect.
+
+NAME is a symbol identifying the effect (e.g., 'STATE, 'CONSOLE)."
+  (name (util:required 'name) :type symbol :read-only t))
 
 (defstruct (ty-predicate
             (:copier nil))
@@ -344,3 +395,111 @@ the list (T1 T2 T3 T4 ...). Otherwise, return (LIST TYPE)."
                                              (cons (car (cst:source (first right)))
                                                    (cdr (cst:source (car (last right)))))))
                   :location location))))))))
+
+;;;
+;;; Effect Row Parsing
+;;;
+
+(defun parse-effect-row (forms location)
+  "Parse an effect row.
+
+Effect rows can be:
+- Pure (special identifier for no effects)
+- A single effect name: State, Console, etc.
+- A type variable: :e
+- A union of effects: (E1 | E2 | ...)
+- A parameterized effect: (State Integer)
+
+FORMS: List of CST forms representing the effect row
+LOCATION: Source location for error reporting"
+  (declare (type list forms)
+           (type source:location location)
+           (values ty &optional))
+
+  (let ((source (source:location-source location)))
+    (cond
+      ;; Single form
+      ((= 1 (length forms))
+       (let ((form (first forms)))
+         (cond
+           ;; Atom: effect name or type variable
+           ((cst:atom form)
+            (let ((raw (cst:raw form)))
+              (cond
+                ;; Pure - no effects
+                ((eq raw 'coalton:pure)
+                 (make-tycon :name 'coalton:Pure
+                             :location (form-location source form)))
+                ;; Type variable (keyword)
+                ((and (symbolp raw)
+                      (eq (symbol-package raw) util:+keyword-package+))
+                 (make-tyvar :name raw
+                             :location (form-location source form)))
+                ;; Effect name
+                ((symbolp raw)
+                 (make-ty-effect-ref :name raw
+                                     :location (form-location source form)))
+                (t
+                 (parse-error "Malformed effect row"
+                              (note source form "expected effect name or type variable"))))))
+           ;; List: union or parameterized effect
+           (t
+            (parse-effect-row-list (cst:listify form) location)))))
+
+      ;; Multiple forms: should be a union written inline
+      (t
+       (parse-effect-row-list forms location)))))
+
+(defun parse-effect-row-list (forms location)
+  "Parse an effect row from a list of forms.
+
+Handles:
+- Effect union: (E1 | E2 | ...)
+- Parameterized effect: (State Integer)"
+  (declare (type util:cst-list forms)
+           (type source:location location)
+           (values ty &optional))
+
+  (let ((source (source:location-source location)))
+    ;; Check if it's a union (contains |)
+    (multiple-value-bind (left right)
+        (util:take-until (lambda (cst)
+                           (and (cst:atom cst)
+                                (let ((raw (cst:raw cst)))
+                                  (and (symbolp raw)
+                                       (string= (symbol-name raw) "|")))))
+                         forms)
+      (if right
+          ;; It's a union
+          (let ((members nil))
+            ;; Parse left side
+            (when left
+              (push (parse-effect-row left location) members))
+            ;; Parse right side (may have more |)
+            (when (rest right)
+              (let ((rest-effect (parse-effect-row (rest right) location)))
+                (if (ty-effect-union-p rest-effect)
+                    ;; Flatten nested unions
+                    (setf members (append (reverse (ty-effect-union-members rest-effect)) members))
+                    (push rest-effect members))))
+            (make-ty-effect-union :members (nreverse members)
+                                  :location location))
+          ;; Not a union - parameterized effect or single effect in parens
+          (if (= 1 (length forms))
+              ;; Single item in parens: (Effect) -> Effect
+              (parse-effect-row forms location)
+              ;; Parameterized effect: (State :s)
+              (let ((effect-name (first forms)))
+                (unless (and (cst:atom effect-name)
+                             (symbolp (cst:raw effect-name)))
+                  (parse-error "Malformed parameterized effect"
+                               (note source effect-name "expected effect name")))
+                ;; Parse as type application
+                (let ((base (make-ty-effect-ref :name (cst:raw effect-name)
+                                                :location (form-location source effect-name))))
+                  (loop :for form :in (rest forms)
+                        :for ty := (parse-type form source)
+                        :do (setf base (make-tapp :from base
+                                                  :to ty
+                                                  :location location)))
+                  base)))))))

@@ -12,6 +12,7 @@
    #:simplify-type                      ; FUNCTION
    #:simplify-union                     ; FUNCTION
    #:simplify-intersection              ; FUNCTION
+   #:simplify-effect-row                ; FUNCTION
    #:compact-type                       ; FUNCTION
    #:remove-polar-variables             ; FUNCTION
    #:sandwiched-type-p                  ; FUNCTION
@@ -228,7 +229,113 @@ It recursively simplifies all parts of the type and applies:
 
   ;; ty-cl-type: return as-is (opaque wrapper)
   (:method ((type cl-types:ty-cl-type))
-    type))
+    type)
+
+  ;; ty-effecting-fn: simplify domain, codomain, and effects
+  (:method ((type ty-effecting-fn))
+    (let ((domain-simp (simplify-type (ty-effecting-fn-domain type)))
+          (codomain-simp (simplify-type (ty-effecting-fn-codomain type)))
+          (effects-simp (simplify-effect-row (ty-effecting-fn-effects type))))
+      (if (and (eq domain-simp (ty-effecting-fn-domain type))
+               (eq codomain-simp (ty-effecting-fn-codomain type))
+               (eq effects-simp (ty-effecting-fn-effects type)))
+          type
+          (make-ty-effecting-fn :domain domain-simp
+                                :codomain codomain-simp
+                                :effects effects-simp))))
+
+  ;; ty-effect-op: simplify request and response types
+  (:method ((type ty-effect-op))
+    (let ((req-simp (simplify-type (ty-effect-op-request-type type)))
+          (resp-simp (simplify-type (ty-effect-op-response-type type))))
+      (if (and (eq req-simp (ty-effect-op-request-type type))
+               (eq resp-simp (ty-effect-op-response-type type)))
+          type
+          (make-ty-effect-op :name (ty-effect-op-name type)
+                             :request-type req-simp
+                             :response-type resp-simp)))))
+
+;;;
+;;; Effect row simplification
+;;;
+
+(defun simplify-effect-row (effects)
+  "Simplify an effect row.
+
+Effect rows are simplified similar to unions:
+- Flatten nested unions of effects
+- Remove duplicates (same effect name)
+- ty-bot (Pure) is identity
+- Single effect becomes that effect"
+  (cond
+    ;; Pure effect: return as-is
+    ((ty-bot-p effects) effects)
+    ;; Single effect operation: simplify its types
+    ((ty-effect-op-p effects)
+     (simplify-type effects))
+    ;; Effect variable: simplify if it has only lower bounds
+    ((tyvar-sub-p effects)
+     (let ((sandwich (sandwiched-type-p effects)))
+       (if sandwich
+           (simplify-effect-row sandwich)
+           ;; Check bounds
+           (let ((lbs (tyvar-sub-lower-bounds effects))
+                 (ubs (tyvar-sub-upper-bounds effects)))
+             (cond
+               ;; Only lower bounds: union of effects
+               ((and lbs (null ubs))
+                (simplify-effect-row (simplify-union lbs)))
+               ;; Only upper bounds: the variable
+               ((and ubs (null lbs))
+                effects)
+               ;; Both or neither: keep variable
+               (t effects))))))
+    ;; Union of effects: simplify members
+    ((ty-union-p effects)
+     (let ((simplified-members
+             (mapcar #'simplify-effect-row (ty-union-members effects))))
+       (simplify-effect-union simplified-members)))
+    ;; Other: just simplify as type
+    (t (simplify-type effects))))
+
+(defun simplify-effect-union (members)
+  "Simplify a union of effects.
+
+This is similar to simplify-union but specialized for effect rows:
+- Removes duplicate effects (by name for ty-effect-op)
+- Removes Pure (ty-bot) as identity
+- Merges effects with same name"
+  (let* ((flat (flatten-union-members members))
+         ;; Remove pure (identity for effect union)
+         (without-pure (remove-if #'ty-bot-p flat))
+         ;; Remove duplicates by effect name for effect operations
+         (unique (remove-effect-duplicates without-pure)))
+    (cond
+      ;; Empty effect row is Pure
+      ((null unique) +ty-bot+)
+      ;; Single effect
+      ((null (rest unique)) (first unique))
+      ;; Multiple effects
+      (t (make-ty-union :members unique)))))
+
+(defun remove-effect-duplicates (effects)
+  "Remove duplicate effects from EFFECTS list.
+
+For ty-effect-op, duplicates have the same name.
+For other types, uses ty= for comparison."
+  (let ((seen-names nil)
+        (result nil))
+    (dolist (e effects)
+      (cond
+        ((ty-effect-op-p e)
+         (let ((name (ty-effect-op-name e)))
+           (unless (member name seen-names)
+             (push name seen-names)
+             (push e result))))
+        (t
+         (unless (member e result :test #'ty=)
+           (push e result)))))
+    (nreverse result)))
 
 ;;;
 ;;; Polar variable removal
@@ -283,7 +390,20 @@ Union and intersection are transparent to polarity."
                (ty-top '(0 . 0))
                (ty-bot '(0 . 0))
                (tgen '(0 . 0))
-               (cl-types:ty-cl-type '(0 . 0)))))
+               (cl-types:ty-cl-type '(0 . 0))
+               ;; ty-effecting-fn: domain is negative, codomain and effects are positive
+               (ty-effecting-fn
+                (let ((dom-counts (count-in (ty-effecting-fn-domain ty) (not pos)))
+                      (cod-counts (count-in (ty-effecting-fn-codomain ty) pos))
+                      (eff-counts (count-in (ty-effecting-fn-effects ty) pos)))
+                  (cons (+ (car dom-counts) (car cod-counts) (car eff-counts))
+                        (+ (cdr dom-counts) (cdr cod-counts) (cdr eff-counts)))))
+               ;; ty-effect-op: request and response types are positive
+               (ty-effect-op
+                (let ((req-counts (count-in (ty-effect-op-request-type ty) pos))
+                      (resp-counts (count-in (ty-effect-op-response-type ty) pos)))
+                  (cons (+ (car req-counts) (car resp-counts))
+                        (+ (cdr req-counts) (cdr resp-counts))))))))
     (let ((counts (count-in type positive)))
       (values (car counts) (cdr counts)))))
 
@@ -363,7 +483,17 @@ SUBSTITUTIONS is an alist of (tyvar-sub . replacement-type) pairs."
                (ty-top ty)
                (ty-bot ty)
                (tgen ty)
-               (cl-types:ty-cl-type ty))))
+               (cl-types:ty-cl-type ty)
+               (ty-effecting-fn
+                (make-ty-effecting-fn
+                 :domain (subst-in (ty-effecting-fn-domain ty))
+                 :codomain (subst-in (ty-effecting-fn-codomain ty))
+                 :effects (subst-in (ty-effecting-fn-effects ty))))
+               (ty-effect-op
+                (make-ty-effect-op
+                 :name (ty-effect-op-name ty)
+                 :request-type (subst-in (ty-effect-op-request-type ty))
+                 :response-type (subst-in (ty-effect-op-response-type ty)))))))
     (subst-in type)))
 
 ;;;
@@ -421,7 +551,14 @@ Returns a hash table mapping tyvar-sub IDs to lists of context paths."
                  (ty-top nil)
                  (ty-bot nil)
                  (tgen nil)
-                 (cl-types:ty-cl-type nil))))
+                 (cl-types:ty-cl-type nil)
+                 (ty-effecting-fn
+                  (collect (ty-effecting-fn-domain ty) (cons :domain path))
+                  (collect (ty-effecting-fn-codomain ty) (cons :codomain path))
+                  (collect (ty-effecting-fn-effects ty) (cons :effects path)))
+                 (ty-effect-op
+                  (collect (ty-effect-op-request-type ty) (cons :request path))
+                  (collect (ty-effect-op-response-type ty) (cons :response path))))))
       (collect type nil)
       contexts)))
 
