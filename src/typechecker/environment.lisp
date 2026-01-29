@@ -27,7 +27,9 @@
   (:local-nicknames
    (#:util #:coalton-impl/util)
    (#:source #:coalton-impl/source)
-   (#:parser #:coalton-impl/parser))
+   (#:parser #:coalton-impl/parser)
+   (#:types-sub #:coalton-impl/typechecker/types-sub)
+   (#:constrain #:coalton-impl/typechecker/constrain))
   (:export
    #:*update-hook*                          ; VARIABLE
    #:value-environment                      ; STRUCT
@@ -168,6 +170,7 @@
    #:unset-name                             ; FUNCTION
    #:lookup-class-instances                 ; FUNCTION
    #:lookup-class-instance                  ; FUNCTION
+   #:lookup-class-instance-sub              ; FUNCTION (subtyping)
    #:lookup-instance-by-codegen-sym         ; FUNCTION
    #:lookup-function-source-parameter-names ; FUNCTION
    #:set-function-source-parameter-names    ; FUNCTION
@@ -1350,6 +1353,26 @@ Signals a coalton-bug error if the type is not found and NO-ERROR is false (the 
       (handler-case
           (let ((subs (predicate-match (ty-class-instance-predicate instance) pred)))
             (return-from lookup-class-instance (values instance subs)))
+        (predicate-unification-error () nil)))
+    (unless no-error
+      (error "Unknown instance for predicate ~S" pred))))
+
+(defun lookup-class-instance-sub (env pred &key no-error)
+  "Find an instance matching PRED using constraint-based matching.
+
+This is the subtyping analog of LOOKUP-CLASS-INSTANCE. It uses
+PREDICATE-MATCH-SUB for matching, which uses constraint propagation
+for tyvar-sub variables instead of creating substitutions.
+
+Returns (VALUES INSTANCE SUBS) where SUBS contains only substitutions
+for regular tyvars (not tyvar-sub, which use constraint propagation)."
+  (declare (type environment env))
+  (let* ((pred-class (ty-predicate-class pred))
+         (instances (lookup-class-instances env pred-class :no-error no-error)))
+    (fset:do-seq (instance instances)
+      (handler-case
+          (let ((subs (constrain:predicate-match-sub (ty-class-instance-predicate instance) pred)))
+            (return-from lookup-class-instance-sub (values instance subs)))
         (predicate-unification-error () nil)))
     (unless no-error
       (error "Unknown instance for predicate ~S" pred))))

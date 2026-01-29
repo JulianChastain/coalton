@@ -7,7 +7,8 @@
   (:local-nicknames
    (#:source #:coalton-impl/source)
    (#:util #:coalton-impl/util)
-   (#:settings #:coalton-impl/settings))
+   (#:settings #:coalton-impl/settings)
+   (#:types-sub #:coalton-impl/typechecker/types-sub))
   (:export
    #:ty-predicate                       ; STRUCT
    #:make-ty-predicate                  ; CONSTRUCTOR
@@ -26,6 +27,9 @@
    #:type-predicate=                    ; FUNCTION
    #:qualify                            ; FUNCTION
    #:pprint-predicate                   ; FUNCTION
+   ;; Algebraic subtyping extensions
+   #:predicate-types-tyvar-sub-p        ; FUNCTION
+   #:apply-predicate-bound              ; FUNCTION
    ))
 
 (in-package #:coalton-impl/typechecker/predicate)
@@ -236,3 +240,51 @@
   (if *print-readably*
       (call-next-method)
       (pprint-qualified-ty stream qualified-ty)))
+
+;;;
+;;; Algebraic Subtyping Extensions
+;;;
+;;; These functions support treating type class predicates as bounds in the
+;;; subtyping lattice. In algebraic subtyping, a predicate like `Eq :a` can
+;;; be viewed as constraining `:a` to be a subtype of "types with Eq instance".
+;;;
+;;; The key insight is that type class constraints become part of the bound
+;;; structure on tyvar-sub variables during inference, rather than being
+;;; separate predicate obligations.
+;;;
+
+(defun predicate-types-tyvar-sub-p (pred)
+  "Check if any of PRED's types contain tyvar-sub variables.
+Returns T if the predicate involves bounded type variables from
+algebraic subtyping inference."
+  (declare (type ty-predicate pred))
+  (some #'types-sub:tyvar-sub-p (type-variables (ty-predicate-types pred))))
+
+(defun apply-predicate-bound (pred type add-bound-fn)
+  "Apply PRED as a constraint on TYPE using ADD-BOUND-FN.
+
+This function supports treating type class predicates as bounds. When a
+predicate like `Eq :a` is encountered during inference, and `:a` is a
+tyvar-sub, we can record this as a constraint on the variable.
+
+ADD-BOUND-FN should be a function (TYVAR-SUB PREDICATE) that records
+the predicate as a bound on the tyvar-sub. This allows the caller to
+choose whether to add upper or lower bounds.
+
+Returns T if any bounds were added, NIL otherwise."
+  (declare (type ty-predicate pred)
+           (type ty type)
+           (type function add-bound-fn))
+  (let ((added nil))
+    ;; For each type in the predicate, if it's a tyvar-sub or contains one,
+    ;; we apply the bound
+    (dolist (pred-type (ty-predicate-types pred))
+      (when (types-sub:tyvar-sub-p pred-type)
+        (funcall add-bound-fn pred-type pred)
+        (setf added t))
+      ;; Also handle nested tyvar-sub in type applications
+      (dolist (var (type-variables pred-type))
+        (when (types-sub:tyvar-sub-p var)
+          (funcall add-bound-fn var pred)
+          (setf added t))))
+    added))

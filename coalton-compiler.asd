@@ -58,11 +58,15 @@
                 :components ((:file "base")
                              (:file "kinds")
                              (:file "types")
+                             (:file "types-sub")       ; Algebraic subtyping types
                              (:file "substitutions")
                              (:file "predicate")
-                             (:file "scheme")
                              (:file "type-errors")
                              (:file "unify")
+                             (:file "constrain")       ; Constraint propagation
+                             (:file "levels")          ; Level-based let-poly
+                             (:file "simplify")        ; Type simplification
+                             (:file "scheme")          ; Moved after simplify for subtyping support
                              (:file "fundeps")
                              (:file "environment")
 

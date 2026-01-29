@@ -1,5 +1,7 @@
 # TypeClasses
 
+> **Note:** Type classes in Coalton are integrated with algebraic subtyping. While the user-facing syntax remains unchanged, the type checker uses constraint propagation internally. See [`algebraic-subtyping.md`](algebraic-subtyping.md) for details on the internal implementation.
+
 ## Syntax
 
 ```lisp

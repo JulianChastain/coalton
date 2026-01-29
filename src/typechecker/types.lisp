@@ -67,6 +67,7 @@
    #:next-pprint-variable-as-tvar       ; FUNCTION
    #:pprint-tvar                        ; FUNCTION
    #:pprint-ty                          ; FUNCTION
+   #:pprint-ty-extended                 ; GENERIC FUNCTION
    #:type-application-error             ; CONDITION
    ))
 
@@ -627,14 +628,26 @@ the list (T1 T2 T3 T4 ...). Otherwise, return (LIST TYPE)."
              (write-string ")" stream)))))))
     (tgen
      (write-string "#GEN" stream)
-     (write (tgen-id ty) :stream stream)))
+     (write (tgen-id ty) :stream stream))
+
+    ;; Fallback for extensible types (tyvar-sub, ty-union, ty-intersection, etc.)
+    ;; These are handled by their own print-object methods via pprint-ty-extended
+    (ty
+     (pprint-ty-extended stream ty)))
 
   ;; Close the braces in the case that the type printing mode is
   ;; :TYPES-AND-ALIASES and TY is aliased.
   (when (and (eq *coalton-type-printing-mode* :types-and-aliases) (ty-alias ty))
     (format stream "]"))
-  
+
   ty)
+
+(defgeneric pprint-ty-extended (stream ty)
+  (:documentation "Extension point for pretty-printing new type structures.
+Called by pprint-ty for types not handled by the core etypecase.")
+  ;; Default: just use princ for unknown types
+  (:method (stream (ty ty))
+    (princ ty stream)))
 
 (defmethod print-object ((ty ty) stream)
   (if *print-readably*

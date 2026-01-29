@@ -106,7 +106,11 @@ Type checking relies mainly on:
 
 - substitution via `apply-substitution`, defined in `src/typechecker/substitutions.lisp` and `src/typechecker/expression.lisp`
 - unification via `mgu` and `unify`, defined in `src/typechecker/unify.lisp`
+- constraint propagation via `constrain`, defined in `src/typechecker/constrain.lisp`
+- level-based generalization via `src/typechecker/levels.lisp`
 - inference via `infer-expression-type`, defined in `src/typechecker/define.lisp`
+
+The type checker supports both traditional HM-style unification and algebraic subtyping with bounded type variables (`tyvar-sub`). See `docs/internals/design-docs/algebraic-subtyping.md` for details on the constraint-based approach.
 
 There are other modules to handle more specific things, but the bulk of the "type calculus" is defined above.
 

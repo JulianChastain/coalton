@@ -19,6 +19,7 @@
 ## Internals
 * [Internals](./internals/internals.md)
 * [How Typeclasses are compiled](./internals/how-typeclasses-are-compiled.md)
+* [Algebraic Subtyping](./internals/design-docs/algebraic-subtyping.md) - Type inference with Simple-sub
 
 ## Additional Resources
 * [Introducing Coalton](https://coalton-lang.github.io/20211010-introducing-coalton/) - external

@@ -15,7 +15,9 @@
    #:coalton-impl/typechecker/fundeps
    #:closure)
   (:local-nicknames
-   (#:util #:coalton-impl/util))
+   (#:util #:coalton-impl/util)
+   (#:types-sub #:coalton-impl/typechecker/types-sub)
+   (#:constrain #:coalton-impl/typechecker/constrain))
   (:export
    #:entail                             ; FUNCTION
    #:fundep-entail                      ; FUNCTION
@@ -23,6 +25,10 @@
    #:split-context                      ; FUNCTION
    #:default-preds                      ; FUNCTION
    #:default-subs                       ; FUNCTION
+   ;; Algebraic subtyping extensions
+   #:entail-sub                         ; FUNCTION
+   #:by-inst-sub                        ; FUNCTION
+   #:reduce-context-sub                 ; FUNCTION
    ))
 
 (in-package #:coalton-impl/typechecker/context-reduction)
@@ -382,4 +388,104 @@ respective superclass predicate is passed to this function."
                              (match from-ty to-ty)
                              new-subs))
                   :finally (return new-subs))))))))
+
+;;;
+;;; Algebraic Subtyping Extensions
+;;;
+;;; These functions extend the context reduction mechanism to support
+;;; algebraic subtyping with tyvar-sub variables. The key difference from
+;;; traditional HM-style context reduction is that we use constraint
+;;; propagation rather than unification when dealing with tyvar-sub.
+;;;
+;;; Type class predicates are treated as bounds on type variables. When
+;;; we have a predicate like `Eq :a` and `:a` is a tyvar-sub, we check
+;;; whether the bounds on `:a` are compatible with the Eq instances.
+;;;
+
+(defun by-inst-sub (env pred)
+  "Find an instance that satisfies PRED using constraint-based matching.
+
+Unlike BY-INST which uses unification, this function uses constraint
+propagation to check if PRED can be satisfied. This allows for more
+flexible matching when dealing with bounded type variables.
+
+Returns (VALUES PREDS FOUNDP) where PREDS are the resulting constraints
+and FOUNDP indicates if a matching instance was found."
+  (declare (type environment env)
+           (type ty-predicate pred)
+           (values ty-predicate-list boolean))
+  (fset:do-seq (inst (lookup-class-instances env (ty-predicate-class pred) :no-error t))
+    (handler-case
+        (let* ((inst-pred (ty-class-instance-predicate inst))
+               (inst-types (ty-predicate-types inst-pred))
+               (pred-types (ty-predicate-types pred)))
+          ;; Try to constrain each type in the predicate against the instance
+          ;; For constraint-based matching, we check if pred-type <= inst-type
+          (loop :for pred-type :in pred-types
+                :for inst-type :in inst-types
+                :do (cond
+                      ;; If pred-type is a tyvar-sub, add inst-type as upper bound
+                      ((types-sub:tyvar-sub-p pred-type)
+                       (constrain:add-upper-bound pred-type inst-type))
+                      ;; If inst-type is a tyvar, we need traditional matching
+                      ((tyvar-p inst-type)
+                       ;; This instance requires fresh instantiation
+                       (return))
+                      ;; Otherwise, check structural compatibility
+                      (t
+                       (constrain:constrain pred-type inst-type))))
+          ;; If we got here, the instance matches
+          (let ((resulting-preds (ty-class-instance-constraints-expanded inst env)))
+            (return-from by-inst-sub (values resulting-preds t))))
+      (constrain:constraint-error () nil)
+      (constrain:occurs-check-error () nil)))
+  (values nil nil))
+
+(defun entail-sub (env preds pred)
+  "Check if PRED is entailed by PREDS using subtyping constraints.
+
+This is the constraint-based analog of ENTAIL. It checks whether PRED
+holds given that all of PREDS hold, using constraint propagation for
+tyvar-sub variables.
+
+The function first checks superclass relationships (which don't change
+with subtyping), then tries instance matching using BY-INST-SUB."
+  (declare (type environment env)
+           (type ty-predicate-list preds)
+           (type ty-predicate pred)
+           (values boolean))
+  (let* ((super (mapcan (lambda (p) (by-super env p)) preds))
+         (value
+           (or (true (member pred super :test #'type-predicate=))
+               (true (multiple-value-bind (inst-preds found)
+                         ;; Use constraint-based instance matching if the
+                         ;; predicate involves tyvar-sub
+                         (if (predicate-types-tyvar-sub-p pred)
+                             (by-inst-sub env pred)
+                             (by-inst env pred))
+                       (and found
+                            (every (lambda (p) (entail-sub env preds p)) inst-preds)))))))
+    value))
+
+(defun reduce-context-sub (env preds)
+  "Reduce PREDS using constraint-based entailment.
+
+This is the constraint-based analog of REDUCE-CONTEXT. It simplifies
+the predicate list by removing predicates that are entailed by the
+context, using constraint propagation for tyvar-sub variables.
+
+Unlike REDUCE-CONTEXT, this function doesn't take substitutions as
+an argument because tyvar-sub variables accumulate bounds rather
+than being substituted."
+  (declare (type environment env)
+           (type ty-predicate-list preds)
+           (values ty-predicate-list))
+  (simplify-context
+   (lambda (ctx pred)
+     ;; Use superclass entailment for simplification
+     (super-entail env ctx pred))
+   ;; Keep predicates not entailed by empty context
+   (loop :for pred :in preds
+         :unless (entail-sub env nil pred)
+           :collect pred)))
 

@@ -12,12 +12,19 @@
    #:tc-env                             ; STRUCT
    #:tc-env-env                         ; ACCESSOR
    #:tc-env-ty-table                    ; ACCESSOR
+   #:tc-env-level                       ; ACCESSOR (for subtyping)
    #:tc-env-add-variable                ; FUNCTION
+   #:tc-env-add-variable-sub            ; FUNCTION (for subtyping)
    #:tc-env-lookup-value                ; FUNCTION
+   #:tc-env-lookup-value-sub            ; FUNCTION (for subtyping)
    #:tc-env-add-definition              ; FUNCTION
    #:tc-env-bound-variables             ; FUNCTION
    #:tc-env-bindings-variables          ; FUNCTION
    #:tc-env-replace-type                ; FUNCTION
+   ;; Level management for subtyping
+   #:tc-env-enter-level                 ; FUNCTION
+   #:tc-env-exit-level                  ; FUNCTION
+   #:with-tc-env-level                  ; MACRO
    ))
 
 (in-package #:coalton-impl/typechecker/tc-env)
@@ -33,7 +40,12 @@
   (env      (util:required 'env)          :type tc:environment :read-only t)
 
   ;; Hash table mapping variables bound in the current translation unit to types
-  (ty-table (make-hash-table :test #'eq)  :type hash-table     :read-only t))
+  (ty-table (make-hash-table :test #'eq)  :type hash-table     :read-only t)
+
+  ;; Current level for let-polymorphism in algebraic subtyping
+  ;; Level 0 is the outermost scope; each let-binding increases the level.
+  ;; This field is mutable to allow entering/exiting scopes.
+  (level    0                             :type fixnum         :read-only nil))
 
 (defun tc-env-add-variable (env name)
   "Add a variable named NAME to ENV and return the scheme."
@@ -136,3 +148,83 @@
   "Returns all of the type variables of the types being checked in ENV. Does not return type variables from the inner main environment because it should not contain any free type variables."
   (loop :for ty :being :the :hash-values :of (tc-env-ty-table env)
         :append (tc:type-variables ty)))
+
+;;;
+;;; Level Management for Algebraic Subtyping
+;;;
+
+(defun tc-env-enter-level (env)
+  "Enter a new level scope for let-polymorphism.
+Returns the previous level for restoration."
+  (declare (type tc-env env)
+           (values fixnum))
+  (let ((prev-level (tc-env-level env)))
+    (incf (tc-env-level env))
+    prev-level))
+
+(defun tc-env-exit-level (env prev-level)
+  "Exit to a previous level scope.
+PREV-LEVEL should be the value returned by tc-env-enter-level."
+  (declare (type tc-env env)
+           (type fixnum prev-level)
+           (values null))
+  (setf (tc-env-level env) prev-level)
+  nil)
+
+(defmacro with-tc-env-level ((env) &body body)
+  "Execute BODY at an increased level for let-polymorphism.
+
+Type variables created within this scope will have a higher level,
+enabling them to be generalized when exiting."
+  (let ((prev-level (gensym "PREV-LEVEL"))
+        (env-var (gensym "ENV")))
+    `(let* ((,env-var ,env)
+            (,prev-level (tc-env-enter-level ,env-var)))
+       (unwind-protect
+            (progn ,@body)
+         (tc-env-exit-level ,env-var ,prev-level)))))
+
+;;;
+;;; Subtyping-aware variable creation
+;;;
+
+(defun tc-env-add-variable-sub (env name)
+  "Add a variable named NAME to ENV using algebraic subtyping.
+Creates a tyvar-sub at the current level instead of a regular tyvar."
+  (declare (type tc-env env)
+           (type symbol name)
+           (values tc:tyvar-sub))
+
+  (when (gethash name (tc-env-ty-table env))
+    (util:coalton-bug "Attempt to add already defined variable with name ~S." name))
+
+  ;; Create a tyvar-sub at the current level
+  (let ((var (tc:make-variable-at-level tc:+kstar+ (tc-env-level env))))
+    (setf (gethash name (tc-env-ty-table env))
+          (tc:to-scheme var))
+    var))
+
+(defun tc-env-lookup-value-sub (env var)
+  "Lookup the type of a variable named VAR in ENV.
+Uses algebraic subtyping instantiation (creates tyvar-sub at current level)."
+  (declare (type tc-env env)
+           (type parser:node-variable var)
+           (values tc:ty tc:ty-predicate-list))
+
+  (let* ((var-name (parser:node-variable-name var))
+         (scheme (or (gethash var-name (tc-env-ty-table env))
+                     (tc:lookup-value-type (tc-env-env env) var-name :no-error t))))
+    (unless scheme
+      ;; Variable is unbound: create an error
+      (apply #'tc:tc-error (format nil "Unknown variable ~a" var-name)
+             (cons (source:note (source:location var)
+                                (format nil "unknown variable ~a" var-name))
+                   (loop :for suggestion :in (tc-env-suggest-value env var-name)
+                         :collect (source:help (source:location var) #'identity suggestion)))))
+    ;; Use fresh-inst-sub for subtyping instantiation
+    (let ((qualified-type (tc:fresh-inst-sub scheme (tc-env-level env))))
+      (values (tc:qualified-ty-type qualified-type)
+              (loop :for pred :in (tc:qualified-ty-predicates qualified-type)
+                    :collect (tc:make-ty-predicate :class (tc:ty-predicate-class pred)
+                                                   :types (tc:ty-predicate-types pred)
+                                                   :location (source:location var)))))))
