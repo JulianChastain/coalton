@@ -6,7 +6,8 @@
    #:coalton-impl/typechecker/types)
   (:local-nicknames
    (#:util #:coalton-impl/util)
-   (#:settings #:coalton-impl/settings))
+   (#:settings #:coalton-impl/settings)
+   (#:scope #:coalton-impl/parser/scope))
   (:export
    ;; Type variable with bounds (for subtyping inference)
    #:tyvar-sub                          ; STRUCT
@@ -16,6 +17,7 @@
    #:tyvar-sub-level                    ; ACCESSOR
    #:tyvar-sub-lower-bounds             ; ACCESSOR
    #:tyvar-sub-upper-bounds             ; ACCESSOR
+   #:tyvar-sub-scope-set                ; ACCESSOR (for hygienic type variables)
    #:tyvar-sub-p                        ; FUNCTION
    #:tyvar-sub-list                     ; TYPE
    ;; Union types
@@ -85,6 +87,10 @@ The LEVEL field is used for let-polymorphism: variables at outer levels
 can be generalized, while variables at inner levels must be constrained
 or extruded to outer levels.
 
+The SCOPE-SET field is used for hygienic type variable binding in macros.
+Type variables with different scope sets are distinct, even if they have
+the same symbolic name. This prevents accidental type variable capture.
+
 ID is a unique identifier for the variable.
 KIND is the kind of the type variable (usually * for regular types)."
   (id           (util:required 'id)    :type fixnum    :read-only t)
@@ -92,7 +98,9 @@ KIND is the kind of the type variable (usually * for regular types)."
   (level        (util:required 'level) :type fixnum    :read-only t)
   ;; Bounds are mutable - they accumulate during constraint propagation
   (lower-bounds nil                    :type ty-list   :read-only nil)
-  (upper-bounds nil                    :type ty-list   :read-only nil))
+  (upper-bounds nil                    :type ty-list   :read-only nil)
+  ;; Scope set for hygienic type variable binding (immutable)
+  (scope-set    (scope:empty-scope-set) :type scope:scope-set :read-only t))
 
 (defun tyvar-sub-list-p (x)
   (and (alexandria:proper-list-p x)
@@ -213,7 +221,11 @@ KIND specifies what kind of types this is the bottom of (usually +kstar+)."
 ;;;
 
 (defmethod ty= ((type1 tyvar-sub) (type2 tyvar-sub))
-  (= (tyvar-sub-id type1) (tyvar-sub-id type2)))
+  "Two tyvar-sub are equal if they have the same ID and the same scope set.
+The scope set check enables hygienic type variable binding in macros."
+  (and (= (tyvar-sub-id type1) (tyvar-sub-id type2))
+       (scope:scope-set-equal (tyvar-sub-scope-set type1)
+                              (tyvar-sub-scope-set type2))))
 
 (defmethod ty= ((type1 ty-top) (type2 ty-top))
   (equalp (ty-top-kind type1) (ty-top-kind type2)))
@@ -284,7 +296,8 @@ KIND specifies what kind of types this is the bottom of (usually +kstar+)."
    :lower-bounds (mapcar (lambda (b) (apply-ksubstitution subs b))
                          (tyvar-sub-lower-bounds type))
    :upper-bounds (mapcar (lambda (b) (apply-ksubstitution subs b))
-                         (tyvar-sub-upper-bounds type))))
+                         (tyvar-sub-upper-bounds type))
+   :scope-set (tyvar-sub-scope-set type)))
 
 (defmethod apply-ksubstitution (subs (type ty-union))
   (make-ty-union

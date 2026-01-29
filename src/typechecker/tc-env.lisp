@@ -6,7 +6,8 @@
    (#:util #:coalton-impl/util)
    (#:parser #:coalton-impl/parser)
    (#:source #:coalton-impl/source)
-   (#:tc #:coalton-impl/typechecker/stage-1))
+   (#:tc #:coalton-impl/typechecker/stage-1)
+   (#:macro #:coalton-impl/parser/macro))
   (:export
    #:make-tc-env                        ; CONSTRUCTOR
    #:tc-env                             ; STRUCT
@@ -25,6 +26,8 @@
    #:tc-env-enter-level                 ; FUNCTION
    #:tc-env-exit-level                  ; FUNCTION
    #:with-tc-env-level                  ; MACRO
+   ;; Expansion constraint application
+   #:apply-expansion-constraints        ; FUNCTION
    ))
 
 (in-package #:coalton-impl/typechecker/tc-env)
@@ -228,3 +231,47 @@ Uses algebraic subtyping instantiation (creates tyvar-sub at current level)."
                     :collect (tc:make-ty-predicate :class (tc:ty-predicate-class pred)
                                                    :types (tc:ty-predicate-types pred)
                                                    :location (source:location var)))))))
+
+;;;
+;;; Expansion Constraint Application
+;;;
+;;; After macro expansion, any type constraints accumulated in the expansion
+;;; context need to be applied to the typechecker. This bridges the hygiene
+;;; system with the type system.
+;;;
+
+(defun apply-expansion-constraints (constraints env)
+  "Apply accumulated type constraints from macro expansion to the typechecker.
+
+CONSTRAINTS is a list of type-constraint structures from an expansion context.
+ENV is the tc-env to apply constraints in.
+
+Each constraint specifies:
+- :SUBTYPE  - The syntax's type must be a subtype of the constraint type
+- :SUPERTYPE - The constraint type must be a subtype of the syntax's type
+- :EQUAL    - The syntax's type must equal the constraint type
+
+Returns NIL. Type errors are signaled via the normal typechecker mechanism."
+  (declare (type list constraints)
+           (type tc-env env)
+           (values null))
+  (dolist (constraint constraints)
+    (let* ((stx (macro:type-constraint-syntax constraint))
+           (kind (macro:type-constraint-kind constraint))
+           (constraint-type (macro:type-constraint-type constraint))
+           ;; Get the type attached to the syntax object, if any
+           (type-info (parser:syntax-object-type-info stx)))
+      (when type-info
+        (let ((stx-type (parser:type-attachment-type type-info)))
+          (ecase kind
+            (:subtype
+             ;; stx-type <: constraint-type
+             (tc:constrain stx-type constraint-type (tc-env-level env)))
+            (:supertype
+             ;; constraint-type <: stx-type
+             (tc:constrain constraint-type stx-type (tc-env-level env)))
+            (:equal
+             ;; stx-type = constraint-type (constrain both directions)
+             (tc:constrain stx-type constraint-type (tc-env-level env))
+             (tc:constrain constraint-type stx-type (tc-env-level env))))))))
+  nil)

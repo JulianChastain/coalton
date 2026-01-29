@@ -58,6 +58,16 @@
    #:make-rename-transformer              ; FUNCTION
    #:rename-transformer-target            ; ACCESSOR
    #:apply-rename-transformer             ; FUNCTION
+
+   ;; Type attachment (for typed macros integration)
+   #:type-attachment                      ; STRUCT
+   #:make-type-attachment                 ; CONSTRUCTOR
+   #:type-attachment-p                    ; PREDICATE
+   #:type-attachment-type                 ; ACCESSOR
+   #:type-attachment-constraints          ; ACCESSOR
+   #:type-attachment-level                ; ACCESSOR
+   #:syntax-object-type-info              ; ACCESSOR
+   #:stx-with-type-info                   ; FUNCTION
    ))
 
 (in-package #:coalton-impl/parser/syntax-object)
@@ -447,3 +457,57 @@ Example:
 
       ;; Unexpected: return as-is
       (t stx))))
+
+;;;
+;;; Type Attachment (for typed macro integration)
+;;;
+;;; Type attachments allow syntax objects to carry type information,
+;;; enabling macros to query and constrain types during expansion.
+;;; This is the foundation for typed macros and type-directed expansion.
+;;;
+
+(defstruct (type-attachment
+            (:copier nil)
+            (:constructor %make-type-attachment (type constraints level)))
+  "Type information attached to a syntax object.
+
+TYPE is the type (a ty structure from the typechecker).
+CONSTRAINTS is a list of type class constraints on the type.
+LEVEL is the let-polymorphism level at which this type was inferred."
+  (type        (error "type required")  :type t :read-only t)
+  (constraints nil                      :type list :read-only t)
+  (level       0                        :type fixnum :read-only t))
+
+(defun make-type-attachment (type &key constraints (level 0))
+  "Create a type attachment with the given TYPE.
+
+CONSTRAINTS is an optional list of type class constraints.
+LEVEL defaults to 0 (outermost level)."
+  (declare (type fixnum level)
+           (values type-attachment))
+  (%make-type-attachment type constraints level))
+
+(defmethod print-object ((obj type-attachment) stream)
+  (print-unreadable-object (obj stream :type t)
+    (format stream "~S" (type-attachment-type obj))
+    (when (type-attachment-constraints obj)
+      (format stream " where ~{~S~^, ~}" (type-attachment-constraints obj)))))
+
+(defun syntax-object-type-info (stx)
+  "Get the type attachment from a syntax object, or NIL if none.
+
+Type information is stored as a property with key :TYPE-INFO."
+  (declare (type syntax-object stx)
+           (values (or null type-attachment)))
+  (let ((info (stx-property stx :type-info)))
+    (when (type-attachment-p info)
+      info)))
+
+(defun stx-with-type-info (stx type-info)
+  "Return a new syntax object with TYPE-INFO attached.
+
+TYPE-INFO should be a type-attachment structure."
+  (declare (type syntax-object stx)
+           (type type-attachment type-info)
+           (values syntax-object))
+  (stx-with-property stx :type-info type-info))

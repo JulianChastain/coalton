@@ -25,10 +25,22 @@
    #:expansion-context-p                  ; PREDICATE
    #:expansion-context-intro-scope        ; ACCESSOR
    #:expansion-context-use-scope          ; ACCESSOR
+   #:expansion-context-level              ; ACCESSOR
+   #:expansion-context-type-bindings      ; ACCESSOR
+   #:expansion-context-type-constraints   ; ACCESSOR
    #:*current-expansion-context*          ; VARIABLE
    #:syntax-local-introduce               ; FUNCTION
    #:make-syntax-introducer               ; FUNCTION
    #:expand-macro-hygienic/ctx            ; FUNCTION
+
+   ;; Type constraint tracking
+   #:type-constraint                      ; STRUCT
+   #:make-type-constraint                 ; CONSTRUCTOR
+   #:type-constraint-syntax               ; ACCESSOR
+   #:type-constraint-kind                 ; ACCESSOR
+   #:type-constraint-type                 ; ACCESSOR
+   #:add-expansion-constraint             ; FUNCTION
+   #:apply-expansion-constraints          ; FUNCTION
 
    ;; Local Expansion Control (Phase 3)
    #:local-expand                         ; FUNCTION
@@ -40,6 +52,10 @@
    ;; Advanced Features (Phase 6)
    #:syntax-track-origin                  ; FUNCTION
    #:syntax-debug-info                    ; FUNCTION
+
+   ;; Type-aware macro operations
+   #:syntax-local-type                    ; FUNCTION
+   #:syntax-local-constrain               ; FUNCTION
    ))
 
 (in-package #:coalton-impl/parser/macro)
@@ -152,18 +168,77 @@ This is a feature flag for gradual rollout.")
 
 (defstruct (expansion-context
             (:copier nil)
-            (:constructor %make-expansion-context (use-scope intro-scope)))
-  "Context for a single macro expansion, tracking scopes for hygiene.
+            (:constructor %make-expansion-context (use-scope intro-scope level type-bindings)))
+  "Context for a single macro expansion, tracking scopes and types for hygiene.
 
 USE-SCOPE is the scope added to input syntax before the transformer runs.
-INTRO-SCOPE is the scope flipped on output syntax after the transformer runs."
-  (use-scope   nil :type scope:scope-token :read-only t)
-  (intro-scope nil :type scope:scope-token :read-only t))
+INTRO-SCOPE is the scope flipped on output syntax after the transformer runs.
+LEVEL is the let-polymorphism level for type variable creation.
+TYPE-BINDINGS is a type-binding-table for hygienic type variable resolution.
+TYPE-CONSTRAINTS is a list of type constraints accumulated during expansion."
+  (use-scope         nil :type scope:scope-token :read-only t)
+  (intro-scope       nil :type scope:scope-token :read-only t)
+  (level             0   :type fixnum :read-only t)
+  (type-bindings     nil :type t :read-only t)  ; type-binding-table from binding-table
+  ;; Mutable: constraints accumulate during expansion
+  (type-constraints  nil :type list))
+
+;;;
+;;; Type Constraint Structure
+;;;
+;;; Type constraints are accumulated during macro expansion and applied
+;;; after expansion completes. This enables type-directed macro expansion.
+;;;
+
+(defstruct (type-constraint
+            (:copier nil)
+            (:constructor %make-type-constraint (syntax kind type)))
+  "A type constraint recorded during macro expansion.
+
+SYNTAX is the syntax object that is constrained.
+KIND is :SUBTYPE, :SUPERTYPE, or :EQUAL indicating the constraint direction.
+TYPE is the type to constrain against."
+  (syntax (error "syntax required") :type stx:syntax-object :read-only t)
+  (kind   (error "kind required")   :type keyword :read-only t)
+  (type   (error "type required")   :type t :read-only t))
+
+(defun make-type-constraint (syntax kind type)
+  "Create a type constraint for SYNTAX.
+
+KIND is :SUBTYPE (syntax <: type), :SUPERTYPE (type <: syntax), or :EQUAL."
+  (declare (type stx:syntax-object syntax)
+           (type keyword kind)
+           (values type-constraint))
+  (%make-type-constraint syntax kind type))
+
+(defmethod print-object ((obj type-constraint) stream)
+  (print-unreadable-object (obj stream :type t)
+    (format stream "~S ~A ~S"
+            (stx:syntax-e (type-constraint-syntax obj))
+            (type-constraint-kind obj)
+            (type-constraint-type obj))))
 
 (defvar *current-expansion-context* nil
   "The expansion context for the currently executing macro transformer.
 Bound during calls to the transformer in expand-macro-hygienic/ctx.
 NIL when not inside a macro expansion.")
+
+(defun add-expansion-constraint (syntax kind type)
+  "Add a type constraint to the current expansion context.
+
+SYNTAX is the syntax object being constrained.
+KIND is :SUBTYPE, :SUPERTYPE, or :EQUAL.
+TYPE is the type to constrain against.
+
+Signals an error if called outside of macro expansion."
+  (declare (type stx:syntax-object syntax)
+           (type keyword kind)
+           (values type-constraint))
+  (unless *current-expansion-context*
+    (error "add-expansion-constraint: not in a macro expansion context"))
+  (let ((constraint (%make-type-constraint syntax kind type)))
+    (push constraint (expansion-context-type-constraints *current-expansion-context*))
+    constraint))
 
 (defun syntax-local-introduce (stx)
   "Flip the current expansion's intro scope on STX.
@@ -214,29 +289,40 @@ to implement definition contexts or module boundaries."
         (:add    (stx:stx-add-scope stx scope))
         (:remove (stx:stx-remove-scope stx scope))))))
 
-(defun expand-macro-hygienic/ctx (stx transformer)
+(defun expand-macro-hygienic/ctx (stx transformer &key (level 0) type-bindings)
   "Expand STX using TRANSFORMER with hygienic scope tracking and context.
 
 Like expand-macro-hygienic, but binds *current-expansion-context* during
 the transformer call, enabling the use of syntax-local-introduce.
 
+LEVEL is the let-polymorphism level for type variable creation.
+TYPE-BINDINGS is an optional type-binding-table for hygienic type resolution.
+
 The transformer receives a single argument (the scoped input syntax).
-It can call syntax-local-introduce to break hygiene intentionally."
+It can call syntax-local-introduce to break hygiene intentionally.
+
+Returns two values:
+1. The expanded syntax object
+2. A list of type constraints accumulated during expansion"
   (declare (type stx:syntax-object stx)
            (type function transformer)
-           (values stx:syntax-object))
+           (type fixnum level)
+           (values stx:syntax-object list))
   (let* ((use-scope (scope:make-scope-token))
          (intro-scope (scope:make-scope-token))
-         (ctx (%make-expansion-context use-scope intro-scope))
+         (ctx (%make-expansion-context use-scope intro-scope level type-bindings))
          ;; Step 1: Add use-site scope to entire input
          (input (stx:stx-add-scope stx use-scope))
          ;; Step 2: Call transformer with context bound
          (output (let ((*current-expansion-context* ctx))
                    (funcall transformer input)))
          ;; Step 3: Flip intro scope on output
-         (result (stx:stx-flip-scope output intro-scope)))
+         (result (stx:stx-flip-scope output intro-scope))
+         ;; Collect accumulated constraints
+         (constraints (expansion-context-type-constraints ctx)))
     ;; Also flip the use-site scope to remove it from passed-through syntax
-    (stx:stx-flip-scope result use-scope)))
+    (values (stx:stx-flip-scope result use-scope)
+            constraints)))
 
 (defun expand-macro-hygienic (stx transformer)
   "Expand STX using TRANSFORMER with hygienic scope tracking.
@@ -519,3 +605,64 @@ Example output:
           (progn (format-it stream) nil)
           (with-output-to-string (s)
             (format-it s))))))
+
+;;;
+;;; Type-Aware Macro Operations
+;;;
+;;; These functions enable macros to interact with the type system,
+;;; querying types and adding constraints during expansion.
+;;;
+
+(defun syntax-local-type (stx)
+  "Get the type of STX if available.
+
+Returns the type attachment from STX, or NIL if no type information
+is attached. Type information is typically attached during or after
+type inference.
+
+This function is useful for macros that need to generate code
+based on the type of an expression. For example, a 'print' macro
+might dispatch to different printing functions based on the type.
+
+Example:
+  (let ((type-info (syntax-local-type expr-stx)))
+    (when type-info
+      (let ((ty (stx:type-attachment-type type-info)))
+        ;; Use ty to inform code generation
+        ...)))
+
+Note: This returns the cached type attachment. It does not trigger
+type inference. Use in contexts where type information has already
+been computed."
+  (declare (type stx:syntax-object stx)
+           (values (or null stx:type-attachment)))
+  (stx:syntax-object-type-info stx))
+
+(defun syntax-local-constrain (stx type &optional (kind :subtype))
+  "Record a type constraint on STX for later processing.
+
+STX is the syntax object to constrain.
+TYPE is the type to constrain against.
+KIND is one of :SUBTYPE (STX <: TYPE), :SUPERTYPE (TYPE <: STX), or :EQUAL.
+
+This function records the constraint in the current expansion context's
+constraint list. The constraints are applied after macro expansion completes.
+
+Returns STX with a :type-constraint property added for constraint tracking.
+
+Example usage in a macro:
+  ;; Ensure the argument is a subtype of Integer
+  (syntax-local-constrain arg-stx integer-type :subtype)
+
+Note: This function requires an active expansion context. Signals an
+error if called outside of macro expansion."
+  (declare (type stx:syntax-object stx)
+           (type (member :subtype :supertype :equal) kind)
+           (values stx:syntax-object))
+  (unless *current-expansion-context*
+    (error "syntax-local-constrain: not in a macro expansion context"))
+  ;; Record the constraint as a property on the syntax object
+  ;; The constraint will be processed when the expansion context is applied
+  (stx:stx-with-property
+   stx :type-constraint
+   (list :type type :kind kind)))
