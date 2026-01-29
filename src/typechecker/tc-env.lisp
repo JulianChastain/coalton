@@ -266,12 +266,12 @@ Returns NIL. Type errors are signaled via the normal typechecker mechanism."
           (ecase kind
             (:subtype
              ;; stx-type <: constraint-type
-             (tc:constrain stx-type constraint-type (tc-env-level env)))
+             (tc:constrain stx-type constraint-type))
             (:supertype
              ;; constraint-type <: stx-type
-             (tc:constrain constraint-type stx-type (tc-env-level env)))
+             (tc:constrain constraint-type stx-type))
             (:equal
              ;; stx-type = constraint-type (constrain both directions)
-             (tc:constrain stx-type constraint-type (tc-env-level env))
-             (tc:constrain constraint-type stx-type (tc-env-level env))))))))
+             (tc:constrain stx-type constraint-type)
+             (tc:constrain constraint-type stx-type)))))))
   nil)

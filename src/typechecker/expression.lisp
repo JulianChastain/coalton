@@ -108,6 +108,23 @@
    #:node-resume-to                     ; STRUCT
    #:make-node-resume-to                ; CONSTRUCTOR
    #:node-resume-to-expr                ; ACCESSOR
+   ;; Effect nodes
+   #:node-perform                       ; STRUCT
+   #:make-node-perform                  ; CONSTRUCTOR
+   #:node-perform-effect                ; ACCESSOR
+   #:node-perform-arg                   ; ACCESSOR
+   #:node-handle-branch                 ; STRUCT
+   #:make-node-handle-branch            ; CONSTRUCTOR
+   #:node-handle-branch-effect          ; ACCESSOR
+   #:node-handle-branch-resume          ; ACCESSOR
+   #:node-handle-branch-body            ; ACCESSOR
+   #:node-handle-branch-location        ; ACCESSOR
+   #:node-handle-branch-list            ; TYPE
+   #:node-handle                        ; STRUCT
+   #:make-node-handle                   ; CONSTRUCTOR
+   #:node-handle-expr                   ; ACCESSOR
+   #:node-handle-branches               ; ACCESSOR
+   #:node-handle-return                 ; ACCESSOR
    #:node-application                   ; STRUCT
    #:make-node-application              ; CONSTRUCTOR
    #:node-application-rator             ; ACCESSOR
@@ -379,6 +396,54 @@
             (:copier nil))
   (expr     (util:required 'expr)         :type node                   :read-only t)
   (branches (util:required 'branches)     :type node-catch-branch-list :read-only t))
+
+;;;
+;;; Algebraic Effect Nodes
+;;;
+
+(defstruct (node-perform
+            (:include node)
+            (:copier nil))
+  "Perform an effect operation.
+
+EFFECT: The effect operation symbol (e.g., STATE.GET, CONSOLE.READ-LINE)
+ARG: Optional argument to the effect operation (may be nil)"
+  (effect (util:required 'effect) :type symbol         :read-only t)
+  (arg    nil                     :type (or null node) :read-only t))
+
+(defstruct (node-handle-branch
+            (:copier nil))
+  "A branch in an effect handler.
+
+EFFECT: The effect operation being handled
+RESUME: Variable name for the resumption function (or nil for non-resumable)
+BODY: The handler body"
+  (effect   (util:required 'effect)   :type symbol           :read-only t)
+  (resume   nil                       :type (or null symbol) :read-only t)
+  (body     (util:required 'body)     :type node-body        :read-only t)
+  (location (util:required 'location) :type source:location  :read-only t))
+
+(defmethod source:location ((self node-handle-branch))
+  (node-handle-branch-location self))
+
+(defun node-handle-branch-list-p (x)
+  (and (alexandria:proper-list-p x)
+       (every #'node-handle-branch-p x)))
+
+(deftype node-handle-branch-list ()
+  '(satisfies node-handle-branch-list-p))
+
+(defstruct (node-handle
+            (:include node)
+            (:copier nil))
+  "Handle effect operations with resumption support.
+
+EXPR: The expression whose effects are being handled
+BRANCHES: List of node-handle-branch for effect handlers
+RETURN: Optional handler for the final return value"
+  (expr     (util:required 'expr)     :type node                    :read-only t)
+  (branches (util:required 'branches) :type node-handle-branch-list :read-only t)
+  (return   nil                       :type (or null node-body)     :read-only t))
 
 (defstruct (node-application
             (:include node)
@@ -681,6 +746,38 @@
    :type (tc:apply-substitution subs (node-type node))
    :location (source:location node)
    :expr (tc:apply-substitution subs (node-resume-to-expr node))))
+
+;;; Algebraic Effects apply-substitution methods
+
+(defmethod tc:apply-substitution (subs (node node-perform))
+  (declare (type tc:substitution-list subs)
+           (values node-perform))
+  (make-node-perform
+   :type (tc:apply-substitution subs (node-type node))
+   :location (source:location node)
+   :effect (node-perform-effect node)
+   :arg (when (node-perform-arg node)
+          (tc:apply-substitution subs (node-perform-arg node)))))
+
+(defmethod tc:apply-substitution (subs (node node-handle-branch))
+  (declare (type tc:substitution-list subs)
+           (values node-handle-branch))
+  (make-node-handle-branch
+   :effect (node-handle-branch-effect node)
+   :resume (node-handle-branch-resume node)
+   :body (tc:apply-substitution subs (node-handle-branch-body node))
+   :location (source:location node)))
+
+(defmethod tc:apply-substitution (subs (node node-handle))
+  (declare (type tc:substitution-list subs)
+           (values node-handle))
+  (make-node-handle
+   :type (tc:apply-substitution subs (node-type node))
+   :location (source:location node)
+   :expr (tc:apply-substitution subs (node-handle-expr node))
+   :branches (tc:apply-substitution subs (node-handle-branches node))
+   :return (when (node-handle-return node)
+             (tc:apply-substitution subs (node-handle-return node)))))
 
 (defmethod tc:apply-substitution (subs (node node-or))
   (declare (type tc:substitution-list subs)

@@ -108,6 +108,23 @@
    #:node-resume-to                     ; STRUCT
    #:make-node-resume-to                ; CONSTRUCTOR
    #:node-resume-to-expr                ; ACCESSOR
+   ;; Effect system nodes
+   #:node-perform                       ; STRUCT
+   #:make-node-perform                  ; CONSTRUCTOR
+   #:node-perform-effect                ; ACCESSOR
+   #:node-perform-arg                   ; ACCESSOR
+   #:node-handle-branch                 ; STRUCT
+   #:make-node-handle-branch            ; CONSTRUCTOR
+   #:node-handle-branch-effect          ; ACCESSOR
+   #:node-handle-branch-resume          ; ACCESSOR
+   #:node-handle-branch-body            ; ACCESSOR
+   #:node-handle-branch-location        ; ACCESSOR
+   #:node-handle-branch-list            ; TYPE
+   #:node-handle                        ; STRUCT
+   #:make-node-handle                   ; CONSTRUCTOR
+   #:node-handle-expr                   ; ACCESSOR
+   #:node-handle-branches               ; ACCESSOR
+   #:node-handle-return                 ; ACCESSOR
    #:node-application                   ; STRUCT
    #:make-node-application              ; CONSTRUCTOR
    #:node-application-rator             ; ACCESSOR
@@ -646,6 +663,54 @@ Rebound to NIL parsing an anonymous FN.")
   (expr     (util:required 'expr)     :type node                   :read-only t)
   (branches (util:required 'branches) :type node-catch-branch-list :read-only t))
 
+;;;
+;;; Algebraic Effect Nodes
+;;;
+
+(defstruct (node-perform
+            (:include node)
+            (:copier nil))
+  "Perform an effect operation.
+
+EFFECT: The effect operation symbol (e.g., STATE.GET, CONSOLE.READ-LINE)
+ARG: Optional argument to the effect operation (may be nil)"
+  (effect (util:required 'effect) :type symbol             :read-only t)
+  (arg    nil                     :type (or null node)     :read-only t))
+
+(defstruct (node-handle-branch
+            (:copier nil))
+  "A branch in an effect handler.
+
+EFFECT: The effect operation being handled
+RESUME: Variable name for the resumption function (or nil for non-resumable)
+BODY: The handler body"
+  (effect   (util:required 'effect)   :type symbol          :read-only t)
+  (resume   nil                       :type (or null symbol) :read-only t)
+  (body     (util:required 'body)     :type node-body       :read-only t)
+  (location (util:required 'location) :type source:location :read-only t))
+
+(defmethod source:location ((self node-handle-branch))
+  (node-handle-branch-location self))
+
+(defun node-handle-branch-list-p (x)
+  (and (alexandria:proper-list-p x)
+       (every #'node-handle-branch-p x)))
+
+(deftype node-handle-branch-list ()
+  '(satisfies node-handle-branch-list-p))
+
+(defstruct (node-handle
+            (:include node)
+            (:copier nil))
+  "Handle effect operations with resumption support.
+
+EXPR: The expression whose effects are being handled
+BRANCHES: List of node-handle-branch for effect handlers
+RETURN: Optional handler for the final return value"
+  (expr     (util:required 'expr)     :type node                    :read-only t)
+  (branches (util:required 'branches) :type node-handle-branch-list :read-only t)
+  (return   nil                       :type (or null node-body)     :read-only t))
+
 (defun parse-expression (form source)
   (declare (type cst:cst form)
            (values node &optional))
@@ -805,6 +870,97 @@ Rebound to NIL parsing an anonymous FN.")
                       :collect (parse-catch-branch (cst:first branches) source))
       :location (form-location source form)))
 
+    ;;
+    ;; Algebraic Effects: perform and handle
+    ;;
+
+    ((and (cst:atom (cst:first form))
+          (eq 'coalton:perform (cst:raw (cst:first form))))
+
+     ;; (perform)
+     (unless (cst:consp (cst:rest form))
+       (parse-error "Malformed perform expression"
+                    (note-end source (cst:first form) "expected effect operation")))
+
+     (let* ((effect-form (cst:second form))
+            (effect-name nil)
+            (effect-arg nil))
+
+       ;; Parse effect operation: either EFFECT.OP or (EFFECT.OP arg)
+       (cond
+         ;; (perform EFFECT.OP) - nullary effect operation
+         ((cst:atom effect-form)
+          (unless (symbolp (cst:raw effect-form))
+            (parse-error "Malformed perform expression"
+                         (note source effect-form "expected effect operation symbol")))
+          (setf effect-name (cst:raw effect-form)))
+
+         ;; (perform (EFFECT.OP arg)) - effect operation with argument
+         ((cst:consp effect-form)
+          (unless (and (cst:atom (cst:first effect-form))
+                       (symbolp (cst:raw (cst:first effect-form))))
+            (parse-error "Malformed perform expression"
+                         (note source (cst:first effect-form) "expected effect operation symbol")))
+          (setf effect-name (cst:raw (cst:first effect-form)))
+          ;; Parse the argument if present
+          (when (cst:consp (cst:rest effect-form))
+            (setf effect-arg (parse-expression (cst:second effect-form) source))
+            ;; Check for extra arguments
+            (when (cst:consp (cst:rest (cst:rest effect-form)))
+              (parse-error "Malformed perform expression"
+                           (note source (cst:first (cst:rest (cst:rest effect-form)))
+                                 "unexpected extra argument")))))
+
+         (t
+          (parse-error "Malformed perform expression"
+                       (note source effect-form "expected effect operation"))))
+
+       ;; Check for trailing forms after the effect
+       (when (cst:consp (cst:rest (cst:rest form)))
+         (parse-error "Malformed perform expression"
+                      (note source (cst:first (cst:rest (cst:rest form)))
+                            "unexpected trailing form")))
+
+       (make-node-perform
+        :effect effect-name
+        :arg effect-arg
+        :location (form-location source form))))
+
+    ((and (cst:atom (cst:first form))
+          (eq 'coalton:handle (cst:raw (cst:first form))))
+
+     ;; (handle)
+     (unless (cst:consp (cst:rest form))
+       (parse-error "Malformed handle expression"
+                    (note-end source (cst:first form) "expected expression")))
+
+     ;; (handle expr)
+     (unless (cst:consp (cst:rest (cst:rest form)))
+       (parse-error "Malformed handle expression"
+                    (note-end source (cst:second form) "expected effect handlers")))
+
+     (let ((expr (parse-expression (cst:second form) source))
+           (branches nil)
+           (return-handler nil))
+
+       ;; Parse handler branches
+       (loop :for rest := (cst:nthrest 2 form) :then (cst:rest rest)
+             :while (cst:consp rest)
+             :for branch-form := (cst:first rest)
+             :do (multiple-value-bind (branch is-return)
+                     (parse-handle-branch branch-form source)
+                   (if is-return
+                       (if return-handler
+                           (parse-error "Duplicate return handler"
+                                        (note source branch-form "return handler already defined"))
+                           (setf return-handler branch))
+                       (push branch branches))))
+
+       (make-node-handle
+        :expr expr
+        :branches (nreverse branches)
+        :return return-handler
+        :location (form-location source form))))
 
     ((and (cst:atom (cst:first form))
           (eq 'coalton:let (cst:raw (cst:first form))))
@@ -1640,6 +1796,86 @@ Rebound to NIL parsing an anonymous FN.")
      :pattern  pattern
      :body (parse-body (cst:rest form) form source)
      :location (form-location source form))))
+
+(defun parse-handle-branch (form source)
+  "Parse a branch in a handle expression.
+
+Valid forms:
+- (EFFECT.OP (resume) body...) - effect handler with resumption
+- (EFFECT.OP body...)          - effect handler without explicit resume
+- (return (x) body...)         - return handler
+
+Returns (VALUES branch is-return-handler-p)"
+  (declare (type cst:cst form)
+           (values (or node-handle-branch node-body) boolean &optional))
+
+  (when (cst:atom form)
+    (parse-error "Malformed handle branch"
+                 (note source form "expected list")))
+
+  (unless (cst:proper-list-p form)
+    (parse-error "Malformed handle branch"
+                 (note source form "unexpected dotted list")))
+
+  (unless (cst:consp (cst:rest form))
+    (parse-error "Malformed handle branch"
+                 (note-end source (cst:first form) "expected handler body")))
+
+  (let ((effect-part (cst:first form)))
+    ;; Check if this is a return handler
+    (when (and (cst:atom effect-part)
+               (eq 'coalton:return (cst:raw effect-part)))
+      ;; Return handler: (return (x) body...)
+      ;; The (x) part is optional - could be (return body...)
+      (let ((rest (cst:rest form)))
+        (cond
+          ;; (return (x) body...) - with binding
+          ((and (cst:consp rest)
+                (cst:consp (cst:first rest))
+                (cst:proper-list-p (cst:first rest))
+                (= 1 (length (cst:listify (cst:first rest))))
+                (cst:atom (cst:first (cst:first rest)))
+                (symbolp (cst:raw (cst:first (cst:first rest)))))
+           ;; Has a binding variable
+           ;; For now, just parse the body - type system will handle the binding
+           (return-from parse-handle-branch
+             (values (parse-body (cst:rest rest) form source) t)))
+          ;; (return body...) - no binding
+          (t
+           (return-from parse-handle-branch
+             (values (parse-body rest form source) t))))))
+
+    ;; Effect handler: (EFFECT.OP (resume) body...) or (EFFECT.OP body...)
+    (unless (and (cst:atom effect-part)
+                 (symbolp (cst:raw effect-part)))
+      (parse-error "Malformed handle branch"
+                   (note source effect-part "expected effect operation symbol")))
+
+    (let ((effect-name (cst:raw effect-part))
+          (rest (cst:rest form))
+          (resume-var nil))
+
+      ;; Check for resumption variable: (EFFECT.OP (resume) body...)
+      (when (and (cst:consp rest)
+                 (cst:consp (cst:first rest))
+                 (cst:proper-list-p (cst:first rest))
+                 (= 1 (length (cst:listify (cst:first rest))))
+                 (cst:atom (cst:first (cst:first rest)))
+                 (symbolp (cst:raw (cst:first (cst:first rest)))))
+        (setf resume-var (cst:raw (cst:first (cst:first rest))))
+        (setf rest (cst:rest rest)))
+
+      (unless (cst:consp rest)
+        (parse-error "Malformed handle branch"
+                     (note-end source effect-part "expected handler body")))
+
+      (values
+       (make-node-handle-branch
+        :effect effect-name
+        :resume resume-var
+        :body (parse-body rest form source)
+        :location (form-location source form))
+       nil))))
 
 (defun parse-cond-clause (form source)
   (declare (type cst:cst form)

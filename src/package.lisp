@@ -101,6 +101,12 @@
    #:in                                 ; Syntax
    )
 
+  ;; Algebraic Effects (syntax only for now)
+  (:export
+   #:perform                            ; Perform an effect operation
+   #:handle                             ; Handle effects with resumption
+   #:Pure)                              ; Pure effect (no effects)
+
   ;; Macros
   (:export
    #:if
