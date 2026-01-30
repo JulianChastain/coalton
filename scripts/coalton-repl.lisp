@@ -181,6 +181,152 @@
     (nreverse results)))
 
 ;;;
+;;; AST Formatting
+;;;
+
+(defvar *last-parsed-ast* nil
+  "Stores the most recently parsed AST for display purposes.")
+
+(defgeneric format-ast (node)
+  (:documentation "Convert a parser AST node to a readable S-expression form."))
+
+(defgeneric format-pattern (pattern)
+  (:documentation "Convert a parser pattern to a readable form."))
+
+;; Default fallback
+(defmethod format-ast (node)
+  `(:unknown ,(type-of node)))
+
+(defmethod format-pattern (pattern)
+  `(:unknown-pattern ,(type-of pattern)))
+
+;; Variables
+(defmethod format-ast ((node parser:node-variable))
+  (parser:node-variable-name node))
+
+;; Literals
+(defmethod format-ast ((node parser:node-integer-literal))
+  (parser:node-integer-literal-value node))
+
+(defmethod format-ast ((node parser:node-literal))
+  (parser:node-literal-value node))
+
+;; Application
+(defmethod format-ast ((node parser:node-application))
+  `(,(format-ast (parser:node-application-rator node))
+    ,@(mapcar #'format-ast (parser:node-application-rands node))))
+
+;; Helper for body formatting
+(defun format-body (body)
+  "Format a node-body, returning a list of body forms."
+  (let ((bindings (parser:node-body-nodes body))
+        (last-node (parser:node-body-last-node body)))
+    (if (null bindings)
+        (list (format-ast last-node))
+        (append (mapcar (lambda (elem)
+                          (cond
+                            ((typep elem 'parser:node-bind)
+                             `(:let ,(format-pattern (parser:node-bind-pattern elem))
+                                    := ,(format-ast (parser:node-bind-expr elem))))
+                            (t (format-ast elem))))
+                        bindings)
+                (list (format-ast last-node))))))
+
+;; Abstraction (lambda)
+(defmethod format-ast ((node parser:node-abstraction))
+  `(:fn ,(mapcar #'format-pattern (parser:node-abstraction-params node))
+        ,@(format-body (parser:node-abstraction-body node))))
+
+;; Let binding
+(defmethod format-ast ((node parser:node-let))
+  `(:let ,(mapcar (lambda (binding)
+                    `(,(format-ast (parser:node-let-binding-name binding))
+                      ,(format-ast (parser:node-let-binding-value binding))))
+                  (parser:node-let-bindings node))
+         ,@(format-body (parser:node-let-body node))))
+
+;; Lisp form
+(defmethod format-ast ((node parser:node-lisp))
+  `(:lisp ,(parser:node-lisp-type node)
+          ,(parser:node-lisp-vars node)
+          :body-omitted))
+
+;; Match
+(defmethod format-ast ((node parser:node-match))
+  `(:match ,(format-ast (parser:node-match-expr node))
+           ,@(mapcar (lambda (branch)
+                       `(,(format-pattern (parser:node-match-branch-pattern branch))
+                         ,@(format-body (parser:node-match-branch-body branch))))
+                     (parser:node-match-branches node))))
+
+;; Progn
+(defmethod format-ast ((node parser:node-progn))
+  `(:progn ,@(format-body (parser:node-progn-body node))))
+
+;; If
+(defmethod format-ast ((node parser:node-if))
+  `(:if ,(format-ast (parser:node-if-expr node))
+        ,(format-ast (parser:node-if-then node))
+        ,(format-ast (parser:node-if-else node))))
+
+;; If/cond
+(defmethod format-ast ((node parser:node-cond))
+  `(:cond ,@(mapcar (lambda (clause)
+                      `(,(format-ast (parser:node-cond-clause-expr clause))
+                        ,(format-ast (parser:node-cond-clause-body clause))))
+                    (parser:node-cond-clauses node))))
+
+;; Do block
+(defmethod format-ast ((node parser:node-do))
+  `(:do ,@(mapcar (lambda (elem)
+                    (cond
+                      ((typep elem 'parser:node-do-bind)
+                       `(:<- ,(format-pattern (parser:node-do-bind-pattern elem))
+                             ,(format-ast (parser:node-do-bind-expr elem))))
+                      ((typep elem 'parser:node-bind)
+                       `(:let ,(format-pattern (parser:node-bind-pattern elem))
+                              := ,(format-ast (parser:node-bind-expr elem))))
+                      (t (format-ast elem))))
+                  (parser:node-do-nodes node))
+         ,(format-ast (parser:node-do-last-node node))))
+
+;; The expression
+(defmethod format-ast ((node parser:node-the))
+  `(:the ,(parser:node-the-type node)
+         ,(format-ast (parser:node-the-expr node))))
+
+;; Return
+(defmethod format-ast ((node parser:node-return))
+  `(:return ,(format-ast (parser:node-return-expr node))))
+
+;; Pattern formatting
+(defmethod format-pattern ((pattern parser:pattern-var))
+  (parser:pattern-var-name pattern))
+
+(defmethod format-pattern ((pattern parser:pattern-wildcard))
+  '_)
+
+(defmethod format-pattern ((pattern parser:pattern-literal))
+  (parser:pattern-literal-value pattern))
+
+(defmethod format-pattern ((pattern parser:pattern-constructor))
+  (let ((name (parser:pattern-constructor-name pattern))
+        (patterns (parser:pattern-constructor-patterns pattern)))
+    (if (null patterns)
+        name
+        `(,name ,@(mapcar #'format-pattern patterns)))))
+
+(defun ast-to-string (node)
+  "Convert an AST node to a readable string representation."
+  (handler-case
+      (let ((*print-pretty* t)
+            (*print-right-margin* 60)
+            (*package* (find-package "COALTON-USER")))
+        (format nil "~S" (format-ast node)))
+    (error (e)
+      (format nil "#<AST format error: ~A>" e))))
+
+;;;
 ;;; Expression evaluation
 ;;;
 
@@ -193,6 +339,8 @@
     (with-open-stream (stream (source:source-stream source))
       (parser:with-reader-context stream
         (let ((node (parser:read-expressions stream source)))
+          ;; Capture AST before renaming for display
+          (setf *last-parsed-ast* node)
           ;; Rename variables for hygiene
           (setf node (parser:rename-variables node))
 
@@ -255,13 +403,18 @@
 (defun eval-coalton-input (input-string)
   "Evaluate INPUT-STRING as either a toplevel form or an expression.
    Returns (values result-type result-data) where:
-   - For expressions: result-type is :expression, result-data is (value type-string)
+   - For expressions: result-type is :expression, result-data is (value type-string ast-string)
    - For toplevel: result-type is :toplevel, result-data is list of (kind name type-string)"
   (if (toplevel-form-p input-string)
       (values :toplevel (eval-coalton-toplevel input-string))
-      (multiple-value-bind (value type-string)
-          (eval-coalton-expression input-string)
-        (values :expression (list value type-string)))))
+      (progn
+        (setf *last-parsed-ast* nil)
+        (multiple-value-bind (value type-string)
+            (eval-coalton-expression input-string)
+          (let ((ast-string (if *last-parsed-ast*
+                                (ast-to-string *last-parsed-ast*)
+                                "<no AST>")))
+            (values :expression (list value type-string ast-string)))))))
 
 ;;;
 ;;; Tutorial display
@@ -349,8 +502,10 @@
 (defun format-expression-result (result-data)
   "Format the result of an expression evaluation."
   (let ((value (first result-data))
-        (type-string (second result-data)))
-    (format t "~C  Type:  ~A~%" #\Return type-string)
+        (type-string (second result-data))
+        (ast-string (third result-data)))
+    (format t "~C  AST:   ~A~%" #\Return ast-string)
+    (format t "  Type:  ~A~%" type-string)
     (format t "  Value: ~S~%" value)
     (format t "~%")))
 
