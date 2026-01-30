@@ -174,6 +174,29 @@
   :serial t
   :components ((:file "fft")))
 
+(asdf:defsystem "coalton/effects-runtime"
+  :description "Trampoline-based async effect runtime for Coalton."
+  :author "Coalton contributors (https://github.com/coalton-lang/coalton)"
+  :license "MIT"
+  :version (:read-file-form "VERSION.txt")
+  :around-compile (lambda (compile)
+                    (let (#+sbcl (sb-ext:*derive-function-types* t)
+                          #+sbcl (sb-ext:*block-compile-default* :specified))
+                      (funcall compile)))
+  :defsystem-depends-on ("coalton-asdf")
+  :depends-on ("coalton"
+               "coalton/library")
+  :pathname "library/effects/runtime"
+  :serial t
+  :components ((:file "package")
+               (:file "continuation")
+               (:file "fiber")
+               (:file "scheduler")
+               (:file "async-io")
+               (:file "handlers")
+               (:file "scope")
+               (:file "trampoline")))
+
 (asdf:defsystem "coalton/testing"
   :author "Coalton contributors (https://github.com/coalton-lang/coalton)"
   :license "MIT"
@@ -273,6 +296,7 @@
   :depends-on ("coalton"
                "coalton/library/big-float"
                "coalton/library/algorithms"
+               "coalton/effects-runtime"
                "coalton/testing"
                "fiasco"
                "quil-coalton/tests"
@@ -353,6 +377,7 @@
                              (:file "resultt")
                              (:file "environment")
                              (:file "statet")))
+               (:file "async-runtime-tests")
                (:module "algorithms-tests"
                 :serial t
                 :components ((:file "fft-tests")))

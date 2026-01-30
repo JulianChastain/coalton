@@ -104,8 +104,10 @@
   ;; Algebraic Effects (syntax only for now)
   (:export
    #:perform                            ; Perform an effect operation
-   #:handle                             ; Handle effects with resumption
-   #:Pure)                              ; Pure effect (no effects)
+   #:handle)                            ; Handle effects with resumption
+  ;; Internal symbol for pure effect (not exported to avoid collision with classes:pure)
+  (:intern
+   #:%pure-effect)                      ; Internal: pure effect type
 
   ;; Macros
   (:export

@@ -426,9 +426,9 @@ LOCATION: Source location for error reporting"
            ((cst:atom form)
             (let ((raw (cst:raw form)))
               (cond
-                ;; Pure - no effects
-                ((eq raw 'coalton:pure)
-                 (make-tycon :name 'coalton:Pure
+                ;; Pure - no effects (user writes "Pure", internal symbol is %pure-effect)
+                ((string-equal (symbol-name raw) "PURE")
+                 (make-tycon :name 'coalton::%pure-effect
                              :location (form-location source form)))
                 ;; Type variable (keyword)
                 ((and (symbolp raw)

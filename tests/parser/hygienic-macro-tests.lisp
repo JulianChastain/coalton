@@ -313,7 +313,7 @@
   "expansion-context holds use-scope and intro-scope"
   (let* ((use-scope (scope:make-scope-token))
          (intro-scope (scope:make-scope-token))
-         (ctx (macro::%make-expansion-context use-scope intro-scope)))
+         (ctx (macro::%make-expansion-context use-scope intro-scope 0 nil)))
     (is (macro:expansion-context-p ctx))
     (is (eq use-scope (macro:expansion-context-use-scope ctx)))
     (is (eq intro-scope (macro:expansion-context-intro-scope ctx)))))

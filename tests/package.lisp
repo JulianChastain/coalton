@@ -49,7 +49,8 @@
    (#:m-res #:coalton-library/monad/resultt)
    (#:m-env #:coalton-library/monad/environment)
    (#:m-stt #:coalton-library/monad/statet)
-   (#:fft #:coalton-library/algorithms/fft)))
+   (#:fft #:coalton-library/algorithms/fft)
+   (#:runtime #:coalton-library/effects/runtime)))
 
 (in-package #:coalton-native-tests)
 
