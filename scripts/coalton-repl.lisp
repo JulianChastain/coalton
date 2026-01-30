@@ -5,7 +5,9 @@
 ;;;;
 ;;;; Features:
 ;;;;   - Shows both type and value of evaluated expressions
-;;;;   - Command history with up/down arrow keys (requires cl-readline)
+;;;;   - Command history with up/down arrow keys
+;;;;   - Line editing (cursor movement, backspace, delete, etc.)
+;;;;   - Persistent history saved to ~/.coalton_history
 
 (require :asdf)
 
@@ -15,18 +17,9 @@
   (handler-bind ((warning #'muffle-warning))
     (asdf:load-system :coalton :verbose nil)))
 
-;; Try to load cl-readline for history support
-(defvar *use-readline* nil)
-(ignore-errors
-  (let ((*standard-output* (make-broadcast-stream))
-        (*error-output* (make-broadcast-stream)))
-    (handler-bind ((warning #'muffle-warning))
-      ;; Try ASDF first
-      (or (ignore-errors (asdf:load-system :cl-readline :verbose nil))
-          ;; Try Quicklisp if available
-          (when (find-package "QL")
-            (funcall (find-symbol "QUICKLOAD" "QL") :cl-readline :silent t)))))
-  (setf *use-readline* (not (null (find-package "RL")))))
+;; Load our pure-Lisp line editor
+;; The script is in PROJECT/scripts/, linedit is in PROJECT/src/
+(load (merge-pathnames "../src/linedit.lisp" *load-truename*))
 
 (defpackage #:coalton-repl
   (:use #:cl)
@@ -36,67 +29,27 @@
    (#:tc #:coalton-impl/typechecker)
    (#:codegen #:coalton-impl/codegen)
    (#:entry #:coalton-impl/entry)
-   (#:settings #:coalton-impl/settings)))
+   (#:settings #:coalton-impl/settings)
+   (#:linedit #:coalton-impl/linedit)))
 
 (in-package #:coalton-repl)
 
 ;;;
-;;; Readline support (dynamically accessed to avoid read-time errors)
+;;; History Management
 ;;;
 
-(defvar *use-readline* cl-user::*use-readline*)
+(defvar *history* (linedit:make-history))
 (defvar *history-file*
   (merge-pathnames ".coalton_history" (user-homedir-pathname)))
 
-(defun rl-symbol (name)
-  "Get a symbol from the RL package by name, or NIL if not found."
-  (let ((pkg (find-package "RL")))
-    (when pkg
-      (let ((sym (find-symbol (string name) pkg)))
-        (when (and sym (fboundp sym))
-          sym)))))
+(defun init-history ()
+  "Load history from file."
+  (linedit:history-load *history* *history-file*))
 
-(defun init-readline ()
-  "Initialize readline with history."
-  (when *use-readline*
-    ;; Load history from file if it exists
-    (when (probe-file *history-file*)
-      (ignore-errors
-        (let ((read-history (rl-symbol "READ-HISTORY")))
-          (when read-history
-            (funcall read-history (namestring *history-file*))))))))
-
-(defun save-readline-history ()
-  "Save readline history to file."
-  (when *use-readline*
-    (ignore-errors
-      (let ((write-history (rl-symbol "WRITE-HISTORY")))
-        (when write-history
-          (funcall write-history (namestring *history-file*)))))))
-
-(defun read-input-readline ()
-  "Read a line using readline with history support."
-  (let* ((readline-fn (rl-symbol "READLINE"))
-         (add-history-fn (rl-symbol "ADD-HISTORY"))
-         (line (when readline-fn
-                 (funcall readline-fn :prompt "coalton> "))))
-    (when (and line
-               (plusp (length (string-trim '(#\Space #\Tab) line)))
-               add-history-fn)
-      (funcall add-history-fn line))
-    line))
-
-(defun read-input-basic ()
-  "Read a line using basic input (no history)."
-  (format t "coalton> ")
-  (finish-output)
-  (read-line *standard-input* nil nil))
-
-(defun read-input ()
-  "Read a line of input, returning NIL on EOF."
-  (if *use-readline*
-      (read-input-readline)
-      (read-input-basic)))
+(defun save-history ()
+  "Save history to file."
+  (ignore-errors
+    (linedit:history-save *history* *history-file*)))
 
 ;;;
 ;;; Type-capturing evaluation
@@ -187,17 +140,18 @@
   (format t "|    True                  ; Boolean               |~%")
   (format t "|    (if True 1 2)         ; Conditional           |~%")
   (format t "|                                                  |~%")
+  (format t "|  Editing:                                        |~%")
+  (format t "|    Up/Down     Navigate history                  |~%")
+  (format t "|    Left/Right  Move cursor                       |~%")
+  (format t "|    Ctrl+A/E    Start/End of line                 |~%")
+  (format t "|    Ctrl+U/K    Clear before/after cursor         |~%")
+  (format t "|    Ctrl+W      Delete word                       |~%")
+  (format t "|    Ctrl+L      Clear screen                      |~%")
+  (format t "|                                                  |~%")
   (format t "|  Commands:                                       |~%")
-  (format t "|    :help                 ; Show this message     |~%")
-  (format t "|    :quit or :exit        ; Exit the REPL         |~%")
-  (format t "|    Ctrl+D                ; Exit the REPL         |~%")
-  (if *use-readline*
-      (progn
-        (format t "|                                                  |~%")
-        (format t "|  History: Up/Down arrows to navigate history     |~%"))
-      (progn
-        (format t "|                                                  |~%")
-        (format t "|  Note: Install cl-readline for history support   |~%")))
+  (format t "|    :help                 Show this message       |~%")
+  (format t "|    :quit or :exit        Exit the REPL           |~%")
+  (format t "|    Ctrl+D                Exit the REPL           |~%")
   (format t "|                                                  |~%")
   (format t "+--------------------------------------------------+~%")
   (format t "~%"))
@@ -224,15 +178,19 @@
 ;;; REPL loop
 ;;;
 
+(defun read-input ()
+  "Read a line of input with editing support."
+  (linedit:linedit :prompt "coalton> " :history *history*))
+
 (defun repl-loop ()
   "Main REPL loop."
-  (init-readline)
+  (init-history)
   (print-tutorial)
   (unwind-protect
        (loop
          (let ((input (read-input)))
            (cond
-             ;; EOF (Ctrl+D)
+             ;; EOF (Ctrl+D) or interrupt
              ((null input)
               (format t "~%Goodbye!~%")
               (return))
@@ -252,6 +210,8 @@
 
              ;; Evaluate expression
              (t
+              ;; Add to history
+              (linedit:history-add *history* input)
               (handler-case
                   (multiple-value-bind (result type-string)
                       (eval-coalton-expression input)
@@ -263,7 +223,7 @@
                 (error (e)
                   (format t "Error: ~A~%~%" e)))))))
     ;; Cleanup: save history
-    (save-readline-history)))
+    (save-history)))
 
 ;; Run the REPL
 (repl-loop)
