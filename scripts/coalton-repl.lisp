@@ -215,13 +215,14 @@
               (handler-case
                   (multiple-value-bind (result type-string)
                       (eval-coalton-expression input)
-                    (format t "  Type:  ~A~%" type-string)
+                    ;; Ensure we start at column 0 (carriage return)
+                    (format t "~C  Type:  ~A~%" #\Return type-string)
                     (format t "  Value: ~S~%" result)
                     (format t "~%"))
                 (source:source-error (e)
-                  (format t "~A~%~%" e))
+                  (format t "~C~A~%~%" #\Return e))
                 (error (e)
-                  (format t "Error: ~A~%~%" e)))))))
+                  (format t "~CError: ~A~%~%" #\Return e)))))))
     ;; Cleanup: save history
     (save-history)))
 
