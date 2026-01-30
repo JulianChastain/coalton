@@ -5,6 +5,7 @@
 ;;;;
 ;;;; Features:
 ;;;;   - Shows both type and value of evaluated expressions
+;;;;   - Supports all Coalton toplevel forms (define, define-type, etc.)
 ;;;;   - Command history with up/down arrow keys
 ;;;;   - Line editing (cursor movement, backspace, delete, etc.)
 ;;;;   - Persistent history saved to ~/.coalton_history
@@ -52,7 +53,135 @@
     (linedit:history-save *history* *history-file*)))
 
 ;;;
-;;; Type-capturing evaluation
+;;; Toplevel form detection
+;;;
+
+(defvar *toplevel-operators*
+  '(coalton:define
+    coalton:declare
+    coalton:define-type
+    coalton:define-struct
+    coalton:define-class
+    coalton:define-instance
+    coalton:define-type-alias
+    coalton:specialize
+    coalton:monomorphize
+    coalton:inline
+    coalton:repr
+    coalton:progn)
+  "List of Coalton toplevel form operators.")
+
+(defun toplevel-form-p (input-string)
+  "Check if INPUT-STRING appears to be a toplevel form.
+   Returns the operator symbol if it is, NIL otherwise."
+  (let* ((*package* (find-package "COALTON-USER"))
+         (*read-eval* nil))
+    (ignore-errors
+      (with-input-from-string (s input-string)
+        (let ((form (read s nil nil)))
+          (when (and (consp form)
+                     (symbolp (car form)))
+            (let ((op (car form)))
+              ;; Check against known toplevel operators
+              (find op *toplevel-operators* :test #'eq))))))))
+
+;;;
+;;; Toplevel form evaluation
+;;;
+
+(defun get-defined-names (program)
+  "Extract names defined in PROGRAM for reporting."
+  (let ((names '()))
+    ;; Collect define names
+    (dolist (def (parser:program-defines program))
+      (push (cons :define (parser:node-variable-name
+                           (parser:toplevel-define-name def)))
+            names))
+    ;; Collect type names
+    (dolist (def (parser:program-types program))
+      (push (cons :type (parser:identifier-src-name
+                         (parser:toplevel-define-type-name def)))
+            names))
+    ;; Collect struct names
+    (dolist (def (parser:program-structs program))
+      (push (cons :struct (parser:identifier-src-name
+                           (parser:toplevel-define-struct-name def)))
+            names))
+    ;; Collect class names
+    (dolist (def (parser:program-classes program))
+      (push (cons :class (parser:identifier-src-name
+                          (parser:toplevel-define-class-name def)))
+            names))
+    ;; Collect instance info (use the predicate for display)
+    (dolist (def (parser:program-instances program))
+      (let ((pred (parser:toplevel-define-instance-pred def)))
+        (push (cons :instance (format nil "~A" pred)) names)))
+    ;; Collect type alias names
+    (dolist (def (parser:program-type-aliases program))
+      (push (cons :alias (parser:identifier-src-name
+                          (parser:toplevel-define-type-alias-name def)))
+            names))
+    (nreverse names)))
+
+(defun format-type-for-name (name env)
+  "Get the type string for NAME from ENV."
+  (let ((scheme (tc:lookup-value-type env name :no-error t)))
+    (when scheme
+      (tc:with-pprint-variable-context ()
+        (with-output-to-string (s)
+          (write scheme :stream s))))))
+
+(defun eval-coalton-toplevel (input-string)
+  "Parse and evaluate a Coalton toplevel form.
+   Returns a list of (kind name &optional type-string) for each definition."
+  (let* ((*package* (find-package "COALTON-USER"))
+         (source (source:make-source-string input-string :name "repl"))
+         (results '()))
+    (with-open-stream (stream (source:source-stream source))
+      (parser:with-reader-context stream
+        ;; Create an empty program
+        (let ((program (parser:make-program))
+              (attributes (make-array 8 :adjustable t :fill-pointer 0)))
+          ;; Read and parse the form
+          (multiple-value-bind (form presentp)
+              (parser:maybe-read-form stream source parser:*coalton-eclector-client*)
+            (unless presentp
+              (error "No form to evaluate"))
+            ;; Parse as toplevel form
+            (parser:parse-toplevel-form form program attributes source)
+            ;; Check for unparsed attributes
+            (when (plusp (length attributes))
+              (error "Trailing attributes without definition"))
+            ;; Reverse the lists since parse-toplevel-form pushes
+            (setf (parser:program-defines program) (nreverse (parser:program-defines program)))
+            (setf (parser:program-types program) (nreverse (parser:program-types program)))
+            (setf (parser:program-structs program) (nreverse (parser:program-structs program)))
+            (setf (parser:program-classes program) (nreverse (parser:program-classes program)))
+            (setf (parser:program-instances program) (nreverse (parser:program-instances program)))
+            (setf (parser:program-type-aliases program) (nreverse (parser:program-type-aliases program)))
+            (setf (parser:program-declares program) (nreverse (parser:program-declares program)))
+            (setf (parser:program-specializations program) (nreverse (parser:program-specializations program)))
+            ;; Get names before compilation
+            (let ((defined-names (get-defined-names program)))
+              ;; Compile and evaluate
+              (multiple-value-bind (compiled-code new-env)
+                  (entry:entry-point program)
+                ;; Update global environment
+                (setf entry:*global-environment* new-env)
+                ;; Evaluate the compiled code
+                (eval compiled-code)
+                ;; Build results with types
+                (dolist (def defined-names)
+                  (let* ((kind (car def))
+                         (name (cdr def))
+                         (type-str (when (and (symbolp name)
+                                              (member kind '(:define)))
+                                     (format-type-for-name name new-env))))
+                    (push (list kind name type-str) results)))))))))
+    (nreverse results)))
+
+;;;
+;;; Expression evaluation
 ;;;
 
 (defun eval-coalton-expression (input-string)
@@ -120,42 +249,54 @@
                       (values result type-string))))))))))))
 
 ;;;
+;;; Unified evaluation
+;;;
+
+(defun eval-coalton-input (input-string)
+  "Evaluate INPUT-STRING as either a toplevel form or an expression.
+   Returns (values result-type result-data) where:
+   - For expressions: result-type is :expression, result-data is (value type-string)
+   - For toplevel: result-type is :toplevel, result-data is list of (kind name type-string)"
+  (if (toplevel-form-p input-string)
+      (values :toplevel (eval-coalton-toplevel input-string))
+      (multiple-value-bind (value type-string)
+          (eval-coalton-expression input-string)
+        (values :expression (list value type-string)))))
+
+;;;
 ;;; Tutorial display
 ;;;
 
 (defun print-tutorial ()
   "Print a short tutorial with example expressions."
   (format t "~%")
-  (format t "+--------------------------------------------------+~%")
-  (format t "|              Welcome to the Coalton REPL         |~%")
-  (format t "+--------------------------------------------------+~%")
-  (format t "|                                                  |~%")
-  (format t "|  Try these examples:                             |~%")
-  (format t "|                                                  |~%")
-  (format t "|    42                    ; Integer literal       |~%")
-  (format t "|    (+ 1 2)               ; Arithmetic            |~%")
-  (format t "|    (fn (x) (+ x 1))      ; Lambda                |~%")
-  (format t "|    (let ((f (fn (x) (* x 2)))) (f 21))           |~%")
-  (format t "|                          ; Named function        |~%")
-  (format t "|    (map (+ 1) (make-list 1 2 3))                 |~%")
-  (format t "|    id                    ; Polymorphic function  |~%")
-  (format t "|    True                  ; Boolean               |~%")
-  (format t "|    (if True 1 2)         ; Conditional           |~%")
-  (format t "|                                                  |~%")
-  (format t "|  Editing:                                        |~%")
-  (format t "|    Up/Down     Navigate history                  |~%")
-  (format t "|    Left/Right  Move cursor                       |~%")
-  (format t "|    Ctrl+A/E    Start/End of line                 |~%")
-  (format t "|    Ctrl+U/K    Clear before/after cursor         |~%")
-  (format t "|    Ctrl+W      Delete word                       |~%")
-  (format t "|    Ctrl+L      Clear screen                      |~%")
-  (format t "|                                                  |~%")
-  (format t "|  Commands:                                       |~%")
-  (format t "|    :help                 Show this message       |~%")
-  (format t "|    :quit or :exit        Exit the REPL           |~%")
-  (format t "|    Ctrl+D                Exit the REPL           |~%")
-  (format t "|                                                  |~%")
-  (format t "+--------------------------------------------------+~%")
+  (format t "+----------------------------------------------------------+~%")
+  (format t "|                  Welcome to the Coalton REPL             |~%")
+  (format t "+----------------------------------------------------------+~%")
+  (format t "|                                                          |~%")
+  (format t "|  Expressions:                                            |~%")
+  (format t "|    42                        ; Integer literal           |~%")
+  (format t "|    (+ 1 2)                   ; Arithmetic                |~%")
+  (format t "|    (fn (x) (+ x 1))          ; Lambda                    |~%")
+  (format t "|    (map (+ 1) (make-list 1 2 3))                         |~%")
+  (format t "|                                                          |~%")
+  (format t "|  Definitions:                                            |~%")
+  (format t "|    (define (double x) (* x 2))                           |~%")
+  (format t "|    (define-type (Maybe :a) None (Some :a))               |~%")
+  (format t "|    (declare triple (Integer -> Integer))                 |~%")
+  (format t "|    (define (triple x) (* x 3))                           |~%")
+  (format t "|                                                          |~%")
+  (format t "|  Editing:                                                |~%")
+  (format t "|    Up/Down       Navigate history                        |~%")
+  (format t "|    Left/Right    Move cursor                             |~%")
+  (format t "|    Ctrl+A/E      Start/End of line                       |~%")
+  (format t "|    Ctrl+U/K      Clear before/after cursor               |~%")
+  (format t "|                                                          |~%")
+  (format t "|  Commands:                                               |~%")
+  (format t "|    :help         Show this message                       |~%")
+  (format t "|    :quit         Exit the REPL                           |~%")
+  (format t "|                                                          |~%")
+  (format t "+----------------------------------------------------------+~%")
   (format t "~%"))
 
 ;;;
@@ -175,6 +316,43 @@
     (or (string-equal trimmed ":help")
         (string-equal trimmed ":h")
         (string-equal trimmed ":?"))))
+
+;;;
+;;; Result formatting
+;;;
+
+(defun format-toplevel-result (results)
+  "Format the results of a toplevel evaluation."
+  (dolist (result results)
+    (let ((kind (first result))
+          (name (second result))
+          (type-str (third result)))
+      (case kind
+        (:define
+         (if type-str
+             (format t "~C  ~A :: ~A~%" #\Return name type-str)
+             (format t "~C  Defined: ~A~%" #\Return name)))
+        (:type
+         (format t "~C  Type defined: ~A~%" #\Return name))
+        (:struct
+         (format t "~C  Struct defined: ~A~%" #\Return name))
+        (:class
+         (format t "~C  Class defined: ~A~%" #\Return name))
+        (:instance
+         (format t "~C  Instance defined: ~A~%" #\Return name))
+        (:alias
+         (format t "~C  Type alias defined: ~A~%" #\Return name))
+        (t
+         (format t "~C  Defined: ~A~%" #\Return name)))))
+  (format t "~%"))
+
+(defun format-expression-result (result-data)
+  "Format the result of an expression evaluation."
+  (let ((value (first result-data))
+        (type-string (second result-data)))
+    (format t "~C  Type:  ~A~%" #\Return type-string)
+    (format t "  Value: ~S~%" value)
+    (format t "~%")))
 
 ;;;
 ;;; REPL loop
@@ -210,17 +388,16 @@
              ((help-command-p input)
               (print-tutorial))
 
-             ;; Evaluate expression
+             ;; Evaluate Coalton input
              (t
               ;; Add to history
               (linedit:history-add *history* input)
               (handler-case
-                  (multiple-value-bind (result type-string)
-                      (eval-coalton-expression input)
-                    ;; Ensure we start at column 0 (carriage return)
-                    (format t "~C  Type:  ~A~%" #\Return type-string)
-                    (format t "  Value: ~S~%" result)
-                    (format t "~%"))
+                  (multiple-value-bind (result-type result-data)
+                      (eval-coalton-input input)
+                    (case result-type
+                      (:toplevel (format-toplevel-result result-data))
+                      (:expression (format-expression-result result-data))))
                 (source:source-error (e)
                   (format t "~C~A~%~%" #\Return e))
                 (error (e)
