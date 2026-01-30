@@ -47,12 +47,27 @@
   (:method ((type1 ty) (type2 ty))
     (error 'unification-error :type1 type1 :type2 type2)))
 
+(defun occurs-in-p (tyvar type)
+  "Check if TYVAR occurs anywhere in TYPE. Short-circuits on first match."
+  (declare (type tyvar tyvar)
+           (type ty type)
+           (optimize (speed 3) (safety 1)))
+  (let ((target-id (tyvar-id tyvar)))
+    (declare (type fixnum target-id))
+    (labels ((check (ty)
+               (etypecase ty
+                 (tyvar (eql target-id (tyvar-id ty)))
+                 (tapp (or (check (tapp-from ty))
+                           (check (tapp-to ty))))
+                 (ty nil))))
+      (check type))))
+
 (defun bind-variable (tyvar type)
   (cond
     ((and (tyvar-p type)
           (ty= type tyvar))
      nil)
-    ((find tyvar (type-variables type))
+    ((occurs-in-p tyvar type)
      (error 'infinite-type-unification-error :type type))
     ((not (equalp (kind-of tyvar)
                   (kind-of type)))

@@ -101,13 +101,23 @@ Returns (PREDS FOUNDP)"
 
 (defun simplify-context (f preds)
   "Simplify PREDS to head-normal form"
-  (labels ((simp-loop (rs ps)
-             (if (endp ps)
-                 rs
-                 (if (funcall f (append rs (rest ps)) (first ps))
-                     (simp-loop rs (rest ps))
-                     (simp-loop (append (list (first ps)) rs) (rest ps))))))
-    (simp-loop nil preds)))
+  (declare (optimize (speed 3) (safety 1)))
+  ;; Use a vector for O(1) access instead of repeated append
+  ;; Original algorithm: rs accumulates in reverse order (prepending)
+  ;; context = rs ++ (rest ps), returns rs at end
+  (let* ((n (length preds))
+         (pred-vec (coerce preds 'vector))
+         (kept (make-array n :fill-pointer 0)))
+    (loop :for i :from 0 :below n
+          :for pred := (aref pred-vec i)
+          ;; Build context: reverse of kept (to match original rs order) + remaining preds
+          :for context := (append (reverse (coerce kept 'list))
+                                  (loop :for j :from (1+ i) :below n
+                                        :collect (aref pred-vec j)))
+          :unless (funcall f context pred)
+            :do (vector-push pred kept))
+    ;; Return in reverse order to match original behavior
+    (nreverse (coerce kept 'list))))
 
 (defun reduce-context (env preds subs)
   (let ((env (apply-substitution subs env))
