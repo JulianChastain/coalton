@@ -1,8 +1,53 @@
 #!/bin/bash
 # Coalton REPL with type display
-# Usage: ./scripts/coalton-repl
+# Usage: ./scripts/coalton-repl [options]
+#
+# Options:
+#   --ast, -a      Show AST (syntax tree) for each expression
+#   --no-type      Hide type information
+#   --help, -h     Show this help message
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
-exec sbcl --noinform --load "$SCRIPT_DIR/coalton-repl.lisp"
+
+SHOW_AST="nil"
+SHOW_TYPE="t"
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --ast|-a)
+            SHOW_AST="t"
+            shift
+            ;;
+        --no-type)
+            SHOW_TYPE="nil"
+            shift
+            ;;
+        --help|-h)
+            echo "Coalton REPL - Interactive Coalton environment"
+            echo ""
+            echo "Usage: $(basename "$0") [options]"
+            echo ""
+            echo "Options:"
+            echo "  --ast, -a      Show AST (syntax tree) for each expression"
+            echo "  --no-type      Hide type information"
+            echo "  --help, -h     Show this help message"
+            echo ""
+            echo "REPL Commands:"
+            echo "  :help          Show tutorial and examples"
+            echo "  :quit          Exit the REPL"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Use --help for usage information"
+            exit 1
+            ;;
+    esac
+done
+
+exec sbcl --noinform \
+    --eval "(defvar *cli-show-ast* $SHOW_AST)" \
+    --eval "(defvar *cli-show-type* $SHOW_TYPE)" \
+    --load "$SCRIPT_DIR/coalton-repl.lisp"

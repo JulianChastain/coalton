@@ -36,6 +36,21 @@
 (in-package #:coalton-repl)
 
 ;;;
+;;; CLI Options
+;;;
+
+;; These may be set by the shell script before loading this file
+(defvar *show-ast* (if (boundp 'cl-user::*cli-show-ast*)
+                       (symbol-value 'cl-user::*cli-show-ast*)
+                       nil)
+  "When true, display AST for evaluated expressions.")
+
+(defvar *show-type* (if (boundp 'cl-user::*cli-show-type*)
+                        (symbol-value 'cl-user::*cli-show-type*)
+                        t)
+  "When true, display type information for evaluated expressions.")
+
+;;;
 ;;; History Management
 ;;;
 
@@ -84,6 +99,9 @@
             (let ((op (car form)))
               ;; Check against known toplevel operators
               (find op *toplevel-operators* :test #'eq))))))))
+
+(defvar *last-parsed-ast* nil
+  "Stores the most recently parsed AST for display purposes.")
 
 ;;;
 ;;; Toplevel form evaluation
@@ -147,6 +165,8 @@
               (parser:maybe-read-form stream source parser:*coalton-eclector-client*)
             (unless presentp
               (error "No form to evaluate"))
+            ;; Capture the read form for AST display (extract raw form from CST)
+            (setf *last-parsed-ast* (cst:raw form))
             ;; Parse as toplevel form
             (parser:parse-toplevel-form form program attributes source)
             ;; Check for unparsed attributes
@@ -183,9 +203,6 @@
 ;;;
 ;;; AST Formatting
 ;;;
-
-(defvar *last-parsed-ast* nil
-  "Stores the most recently parsed AST for display purposes.")
 
 (defgeneric format-ast (node)
   (:documentation "Convert a parser AST node to a readable S-expression form."))
@@ -400,21 +417,34 @@
 ;;; Unified evaluation
 ;;;
 
+(defun format-toplevel-ast (form)
+  "Format a toplevel form for AST display."
+  (handler-case
+      (let ((*print-pretty* t)
+            (*print-right-margin* 60)
+            (*package* (find-package "COALTON-USER")))
+        (format nil "~S" form))
+    (error (e)
+      (format nil "#<AST format error: ~A>" e))))
+
 (defun eval-coalton-input (input-string)
   "Evaluate INPUT-STRING as either a toplevel form or an expression.
    Returns (values result-type result-data) where:
    - For expressions: result-type is :expression, result-data is (value type-string ast-string)
-   - For toplevel: result-type is :toplevel, result-data is list of (kind name type-string)"
+   - For toplevel: result-type is :toplevel, result-data is (results-list ast-string)"
+  (setf *last-parsed-ast* nil)
   (if (toplevel-form-p input-string)
-      (values :toplevel (eval-coalton-toplevel input-string))
-      (progn
-        (setf *last-parsed-ast* nil)
-        (multiple-value-bind (value type-string)
-            (eval-coalton-expression input-string)
-          (let ((ast-string (if *last-parsed-ast*
-                                (ast-to-string *last-parsed-ast*)
-                                "<no AST>")))
-            (values :expression (list value type-string ast-string)))))))
+      (let ((results (eval-coalton-toplevel input-string)))
+        (let ((ast-string (if *last-parsed-ast*
+                              (format-toplevel-ast *last-parsed-ast*)
+                              "<no AST>")))
+          (values :toplevel (list results ast-string))))
+      (multiple-value-bind (value type-string)
+          (eval-coalton-expression input-string)
+        (let ((ast-string (if *last-parsed-ast*
+                              (ast-to-string *last-parsed-ast*)
+                              "<no AST>")))
+          (values :expression (list value type-string ast-string))))))
 
 ;;;
 ;;; Tutorial display
@@ -474,39 +504,53 @@
 ;;; Result formatting
 ;;;
 
-(defun format-toplevel-result (results)
+(defun format-toplevel-result (result-data)
   "Format the results of a toplevel evaluation."
-  (dolist (result results)
-    (let ((kind (first result))
-          (name (second result))
-          (type-str (third result)))
-      (case kind
-        (:define
-         (if type-str
-             (format t "~C  ~A :: ~A~%" #\Return name type-str)
-             (format t "~C  Defined: ~A~%" #\Return name)))
-        (:type
-         (format t "~C  Type defined: ~A~%" #\Return name))
-        (:struct
-         (format t "~C  Struct defined: ~A~%" #\Return name))
-        (:class
-         (format t "~C  Class defined: ~A~%" #\Return name))
-        (:instance
-         (format t "~C  Instance defined: ~A~%" #\Return name))
-        (:alias
-         (format t "~C  Type alias defined: ~A~%" #\Return name))
-        (t
-         (format t "~C  Defined: ~A~%" #\Return name)))))
-  (format t "~%"))
+  (let ((results (first result-data))
+        (ast-string (second result-data))
+        (first-line t))
+    ;; Print AST if enabled
+    (when *show-ast*
+      (format t "~C  AST:   ~A~%" #\Return ast-string)
+      (setf first-line nil))
+    ;; Then print each definition
+    (dolist (result results)
+      (let ((kind (first result))
+            (name (second result))
+            (type-str (third result)))
+        (case kind
+          (:define
+           (if (and *show-type* type-str)
+               (format t "~A  ~A :: ~A~%" (if first-line #\Return #\Space) name type-str)
+               (format t "~A  Defined: ~A~%" (if first-line #\Return #\Space) name)))
+          (:type
+           (format t "~A  Type defined: ~A~%" (if first-line #\Return #\Space) name))
+          (:struct
+           (format t "~A  Struct defined: ~A~%" (if first-line #\Return #\Space) name))
+          (:class
+           (format t "~A  Class defined: ~A~%" (if first-line #\Return #\Space) name))
+          (:instance
+           (format t "~A  Instance defined: ~A~%" (if first-line #\Return #\Space) name))
+          (:alias
+           (format t "~A  Type alias defined: ~A~%" (if first-line #\Return #\Space) name))
+          (t
+           (format t "~A  Defined: ~A~%" (if first-line #\Return #\Space) name)))
+        (setf first-line nil)))
+    (format t "~%")))
 
 (defun format-expression-result (result-data)
   "Format the result of an expression evaluation."
   (let ((value (first result-data))
         (type-string (second result-data))
-        (ast-string (third result-data)))
-    (format t "~C  AST:   ~A~%" #\Return ast-string)
-    (format t "  Type:  ~A~%" type-string)
-    (format t "  Value: ~S~%" value)
+        (ast-string (third result-data))
+        (first-line t))
+    (when *show-ast*
+      (format t "~C  AST:   ~A~%" #\Return ast-string)
+      (setf first-line nil))
+    (when *show-type*
+      (format t "~A  Type:  ~A~%" (if first-line #\Return #\Space) type-string)
+      (setf first-line nil))
+    (format t "~A  Value: ~S~%" (if first-line #\Return #\Space) value)
     (format t "~%")))
 
 ;;;
