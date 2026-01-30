@@ -2,6 +2,10 @@
 ;;;;
 ;;;; Usage: ./scripts/coalton-repl
 ;;;;    or: sbcl --noinform --load scripts/coalton-repl.lisp
+;;;;
+;;;; Features:
+;;;;   - Shows both type and value of evaluated expressions
+;;;;   - Command history with up/down arrow keys (requires cl-readline)
 
 (require :asdf)
 
@@ -10,6 +14,19 @@
       (*error-output* (make-broadcast-stream)))
   (handler-bind ((warning #'muffle-warning))
     (asdf:load-system :coalton :verbose nil)))
+
+;; Try to load cl-readline for history support
+(defvar *use-readline* nil)
+(ignore-errors
+  (let ((*standard-output* (make-broadcast-stream))
+        (*error-output* (make-broadcast-stream)))
+    (handler-bind ((warning #'muffle-warning))
+      ;; Try ASDF first
+      (or (ignore-errors (asdf:load-system :cl-readline :verbose nil))
+          ;; Try Quicklisp if available
+          (when (find-package "QL")
+            (funcall (find-symbol "QUICKLOAD" "QL") :cl-readline :silent t)))))
+  (setf *use-readline* (not (null (find-package "RL")))))
 
 (defpackage #:coalton-repl
   (:use #:cl)
@@ -22,6 +39,64 @@
    (#:settings #:coalton-impl/settings)))
 
 (in-package #:coalton-repl)
+
+;;;
+;;; Readline support (dynamically accessed to avoid read-time errors)
+;;;
+
+(defvar *use-readline* cl-user::*use-readline*)
+(defvar *history-file*
+  (merge-pathnames ".coalton_history" (user-homedir-pathname)))
+
+(defun rl-symbol (name)
+  "Get a symbol from the RL package by name, or NIL if not found."
+  (let ((pkg (find-package "RL")))
+    (when pkg
+      (let ((sym (find-symbol (string name) pkg)))
+        (when (and sym (fboundp sym))
+          sym)))))
+
+(defun init-readline ()
+  "Initialize readline with history."
+  (when *use-readline*
+    ;; Load history from file if it exists
+    (when (probe-file *history-file*)
+      (ignore-errors
+        (let ((read-history (rl-symbol "READ-HISTORY")))
+          (when read-history
+            (funcall read-history (namestring *history-file*))))))))
+
+(defun save-readline-history ()
+  "Save readline history to file."
+  (when *use-readline*
+    (ignore-errors
+      (let ((write-history (rl-symbol "WRITE-HISTORY")))
+        (when write-history
+          (funcall write-history (namestring *history-file*)))))))
+
+(defun read-input-readline ()
+  "Read a line using readline with history support."
+  (let* ((readline-fn (rl-symbol "READLINE"))
+         (add-history-fn (rl-symbol "ADD-HISTORY"))
+         (line (when readline-fn
+                 (funcall readline-fn :prompt "coalton> "))))
+    (when (and line
+               (plusp (length (string-trim '(#\Space #\Tab) line)))
+               add-history-fn)
+      (funcall add-history-fn line))
+    line))
+
+(defun read-input-basic ()
+  "Read a line using basic input (no history)."
+  (format t "coalton> ")
+  (finish-output)
+  (read-line *standard-input* nil nil))
+
+(defun read-input ()
+  "Read a line of input, returning NIL on EOF."
+  (if *use-readline*
+      (read-input-readline)
+      (read-input-basic)))
 
 ;;;
 ;;; Type-capturing evaluation
@@ -114,57 +189,81 @@
   (format t "|                                                  |~%")
   (format t "|  Commands:                                       |~%")
   (format t "|    :help                 ; Show this message     |~%")
-  (format t "|    :quit                 ; Exit the REPL         |~%")
+  (format t "|    :quit or :exit        ; Exit the REPL         |~%")
+  (format t "|    Ctrl+D                ; Exit the REPL         |~%")
+  (if *use-readline*
+      (progn
+        (format t "|                                                  |~%")
+        (format t "|  History: Up/Down arrows to navigate history     |~%"))
+      (progn
+        (format t "|                                                  |~%")
+        (format t "|  Note: Install cl-readline for history support   |~%")))
   (format t "|                                                  |~%")
   (format t "+--------------------------------------------------+~%")
   (format t "~%"))
 
 ;;;
+;;; Command handling
+;;;
+
+(defun exit-command-p (input)
+  "Check if INPUT is an exit command."
+  (let ((trimmed (string-trim '(#\Space #\Tab) input)))
+    (or (string-equal trimmed ":quit")
+        (string-equal trimmed ":exit")
+        (string-equal trimmed ":q"))))
+
+(defun help-command-p (input)
+  "Check if INPUT is a help command."
+  (let ((trimmed (string-trim '(#\Space #\Tab) input)))
+    (or (string-equal trimmed ":help")
+        (string-equal trimmed ":h")
+        (string-equal trimmed ":?"))))
+
+;;;
 ;;; REPL loop
 ;;;
 
-(defun read-input ()
-  "Read a line of input, returning NIL on EOF."
-  (format t "coalton> ")
-  (finish-output)
-  (read-line *standard-input* nil nil))
-
 (defun repl-loop ()
   "Main REPL loop."
+  (init-readline)
   (print-tutorial)
-  (loop
-    (let ((input (read-input)))
-      (cond
-        ;; EOF
-        ((null input)
-         (format t "~%Goodbye!~%")
-         (return))
+  (unwind-protect
+       (loop
+         (let ((input (read-input)))
+           (cond
+             ;; EOF (Ctrl+D)
+             ((null input)
+              (format t "~%Goodbye!~%")
+              (return))
 
-        ;; Empty line
-        ((string= (string-trim '(#\Space #\Tab) input) "")
-         nil)
+             ;; Empty line
+             ((string= (string-trim '(#\Space #\Tab) input) "")
+              nil)
 
-        ;; :quit command
-        ((string-equal (string-trim '(#\Space #\Tab) input) ":quit")
-         (format t "Goodbye!~%")
-         (return))
+             ;; Exit commands
+             ((exit-command-p input)
+              (format t "Goodbye!~%")
+              (return))
 
-        ;; :help command
-        ((string-equal (string-trim '(#\Space #\Tab) input) ":help")
-         (print-tutorial))
+             ;; Help command
+             ((help-command-p input)
+              (print-tutorial))
 
-        ;; Evaluate expression
-        (t
-         (handler-case
-             (multiple-value-bind (result type-string)
-                 (eval-coalton-expression input)
-               (format t "  Type:  ~A~%" type-string)
-               (format t "  Value: ~S~%" result)
-               (format t "~%"))
-           (source:source-error (e)
-             (format t "~A~%~%" e))
-           (error (e)
-             (format t "Error: ~A~%~%" e))))))))
+             ;; Evaluate expression
+             (t
+              (handler-case
+                  (multiple-value-bind (result type-string)
+                      (eval-coalton-expression input)
+                    (format t "  Type:  ~A~%" type-string)
+                    (format t "  Value: ~S~%" result)
+                    (format t "~%"))
+                (source:source-error (e)
+                  (format t "~A~%~%" e))
+                (error (e)
+                  (format t "Error: ~A~%~%" e)))))))
+    ;; Cleanup: save history
+    (save-readline-history)))
 
 ;; Run the REPL
 (repl-loop)
