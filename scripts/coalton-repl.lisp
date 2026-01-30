@@ -135,6 +135,8 @@
   (format t "|    42                    ; Integer literal       |~%")
   (format t "|    (+ 1 2)               ; Arithmetic            |~%")
   (format t "|    (fn (x) (+ x 1))      ; Lambda                |~%")
+  (format t "|    (let ((f (fn (x) (* x 2)))) (f 21))           |~%")
+  (format t "|                          ; Named function        |~%")
   (format t "|    (map (+ 1) (make-list 1 2 3))                 |~%")
   (format t "|    id                    ; Polymorphic function  |~%")
   (format t "|    True                  ; Boolean               |~%")
