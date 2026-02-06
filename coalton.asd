@@ -110,6 +110,18 @@
                              (:file "optionalt")
                              (:file "free")
                              (:file "freet")))
+               (:module "continuations"
+                :serial t
+                :components ((:file "package")
+                             (:file "continuations")
+                             (:file "cps-stdlib")))
+               (:module "effects"
+                :serial t
+                :components ((:file "package")
+                             (:file "state")
+                             (:file "reader")
+                             (:file "writer")
+                             (:file "combinators")))
                ;; Unfortunately this had to be split from the rest of the
                ;; experimental files because of intermediate dependencies.
                (:module "experimental-do-control"
@@ -379,6 +391,7 @@
                              (:file "environment")
                              (:file "statet")))
                (:file "async-runtime-tests")
+               (:file "continuations-tests")
                (:module "algorithms-tests"
                 :serial t
                 :components ((:file "fft-tests")))

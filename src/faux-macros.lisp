@@ -148,3 +148,32 @@
 (define-coalton-editor-macro coalton:break (&optional label))
 
 (define-coalton-editor-macro coalton:continue (&optional label))
+
+;;; Algebraic Effects
+
+(define-coalton-editor-macro coalton:perform (effect-op)
+  "Perform an effect operation.")
+
+(define-coalton-editor-macro coalton:handle (expr &body handlers)
+  "Handle effect operations with resumption support.")
+
+;;; Delimited Continuations
+
+(define-coalton-editor-macro coalton:reset (&body body)
+  "Establish a continuation delimiter (prompt).
+
+(reset body...) delimits the extent of any shift within body.
+Continuations captured by shift will only extend up to this reset.")
+
+(define-coalton-editor-macro coalton:shift (k &body body)
+  "Capture the current delimited continuation.
+
+(shift k body...) captures the continuation up to the nearest enclosing reset,
+binds it to k, and evaluates body. The captured continuation k can be invoked
+zero, once, or multiple times with (k value).")
+
+(define-coalton-editor-macro coalton:call/cc (k &body body)
+  "Call with current continuation (non-delimited).
+
+(call/cc k body...) captures the entire current continuation and binds it to k.
+Prefer shift/reset for delimited continuations in most cases.")

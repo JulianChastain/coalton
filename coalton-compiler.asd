@@ -11,6 +11,7 @@
                           #+sbcl (sb-ext:*block-compile-default* :specified))
                       (funcall compile)))
   :depends-on ("alexandria"
+               "cl-cont"
                "concrete-syntax-tree"
                "eclector"
                "eclector-concrete-syntax-tree"
