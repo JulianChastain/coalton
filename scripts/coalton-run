@@ -1,0 +1,25 @@
+#!/bin/bash
+# Run a Coalton source file
+# Usage: ./scripts/coalton-run <file.coal>
+#    or: echo '(package foo) ...' | ./scripts/coalton-run
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+cd "$PROJECT_DIR"
+
+for arg in "$@"; do
+    case "$arg" in
+        --help|-h)
+            echo "Usage: $(basename "$0") [<file.coal>]"
+            echo ""
+            echo "Compile, typecheck, and execute a Coalton source file."
+            echo "If no file is given, reads Coalton source from stdin."
+            exit 0
+            ;;
+    esac
+done
+
+exec sbcl --noinform \
+    --eval "(push (truename \".\") asdf:*central-registry*)" \
+    --load "$SCRIPT_DIR/coalton-run.lisp" \
+    "$@"
