@@ -7,8 +7,22 @@
    (#:tc #:coalton-impl/typechecker)
    (#:codegen #:coalton-impl/codegen)
    (#:entry #:coalton-impl/entry)
-   (#:settings #:coalton-impl/settings))
+   (#:settings #:coalton-impl/settings)
+   (#:algo #:coalton-impl/algorithm))
   (:export #:start-server
            #:stop-server
            #:*server*
-           #:*port*))
+           #:*port*
+           #:*eval-timeout*
+           #:*initial-environment*
+           #:snapshot-environment
+           #:lookup-type-of
+           #:list-definitions
+           #:apropos-coalton
+           #:reset-environment
+           #:type-check-expression
+           #:eval-multiple
+           #:describe-symbol
+           #:macroexpand-coalton
+           #:disassemble-coalton
+           #:load-coalton-file))

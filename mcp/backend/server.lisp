@@ -21,6 +21,29 @@
     (when (and body (plusp (length body)))
       (yason:parse body))))
 
+(defun encode-result-plist (result)
+  "Encode a result plist (:success T/NIL :result/:error ...) as a JSON string."
+  (with-output-to-string (s)
+    (yason:with-output (s)
+      (yason:with-object ()
+        (if (getf result :success)
+            (progn
+              (yason:encode-object-element "success" t)
+              (let ((val (getf result :result)))
+                (yason:encode-object-element
+                 "result"
+                 (if (listp val)
+                     ;; Convert list of strings or plists to JSON-friendly format
+                     (mapcar (lambda (item)
+                               (if (stringp item)
+                                   item
+                                   (format nil "~S" item)))
+                             val)
+                     val))))
+            (progn
+              (yason:encode-object-element "success" 'yason:false)
+              (yason:encode-object-element "error" (getf result :error))))))))
+
 ;;;
 ;;; Endpoint: ping
 ;;;
@@ -68,6 +91,164 @@
                    (progn
                      (yason:encode-object-element "success" 'yason:false)
                      (yason:encode-object-element "error" (getf result :error))))))))))))
+
+;;;
+;;; Endpoint: type-of
+;;;
+
+(defun handle-type-of ()
+  "Handle POST /lisply/type-of."
+  (json-content-type)
+  (let* ((json (parse-json-body))
+         (name (and json (gethash "name" json))))
+    (if (null name)
+        (with-output-to-string (s)
+          (yason:with-output (s)
+            (yason:with-object ()
+              (yason:encode-object-element "success" 'yason:false)
+              (yason:encode-object-element "error" "Missing 'name' field"))))
+        (encode-result-plist (lookup-type-of name)))))
+
+;;;
+;;; Endpoint: list-definitions
+;;;
+
+(defun handle-list-definitions ()
+  "Handle POST /lisply/list-definitions."
+  (json-content-type)
+  (let* ((json (parse-json-body))
+         (filter-package (and json (gethash "package" json))))
+    (encode-result-plist (list-definitions filter-package))))
+
+;;;
+;;; Endpoint: apropos-coalton
+;;;
+
+(defun handle-apropos-coalton ()
+  "Handle POST /lisply/apropos-coalton."
+  (json-content-type)
+  (let* ((json (parse-json-body))
+         (search (and json (gethash "search" json))))
+    (if (null search)
+        (with-output-to-string (s)
+          (yason:with-output (s)
+            (yason:with-object ()
+              (yason:encode-object-element "success" 'yason:false)
+              (yason:encode-object-element "error" "Missing 'search' field"))))
+        (encode-result-plist (apropos-coalton search)))))
+
+;;;
+;;; Endpoint: reset-environment
+;;;
+
+(defun handle-reset-environment ()
+  "Handle POST /lisply/reset-environment."
+  (json-content-type)
+  (encode-result-plist (reset-environment)))
+
+;;;
+;;; Endpoint: type-check
+;;;
+
+(defun handle-type-check ()
+  "Handle POST /lisply/type-check."
+  (json-content-type)
+  (let* ((json (parse-json-body))
+         (code (and json (gethash "code" json))))
+    (if (null code)
+        (with-output-to-string (s)
+          (yason:with-output (s)
+            (yason:with-object ()
+              (yason:encode-object-element "success" 'yason:false)
+              (yason:encode-object-element "error" "Missing 'code' field"))))
+        (encode-result-plist (type-check-expression code)))))
+
+;;;
+;;; Endpoint: multi-eval
+;;;
+
+(defun handle-multi-eval ()
+  "Handle POST /lisply/multi-eval."
+  (json-content-type)
+  (let* ((json (parse-json-body))
+         (code (and json (gethash "code" json)))
+         (package-name (and json (gethash "package" json))))
+    (if (null code)
+        (with-output-to-string (s)
+          (yason:with-output (s)
+            (yason:with-object ()
+              (yason:encode-object-element "success" 'yason:false)
+              (yason:encode-object-element "error" "Missing 'code' field"))))
+        (encode-result-plist (eval-multiple code package-name)))))
+
+;;;
+;;; Endpoint: describe-symbol
+;;;
+
+(defun handle-describe-symbol ()
+  "Handle POST /lisply/describe-symbol."
+  (json-content-type)
+  (let* ((json (parse-json-body))
+         (name (and json (gethash "name" json))))
+    (if (null name)
+        (with-output-to-string (s)
+          (yason:with-output (s)
+            (yason:with-object ()
+              (yason:encode-object-element "success" 'yason:false)
+              (yason:encode-object-element "error" "Missing 'name' field"))))
+        (encode-result-plist (describe-symbol name)))))
+
+;;;
+;;; Endpoint: macroexpand-coalton
+;;;
+
+(defun handle-macroexpand-coalton ()
+  "Handle POST /lisply/macroexpand-coalton."
+  (json-content-type)
+  (let* ((json (parse-json-body))
+         (code (and json (gethash "code" json))))
+    (if (null code)
+        (with-output-to-string (s)
+          (yason:with-output (s)
+            (yason:with-object ()
+              (yason:encode-object-element "success" 'yason:false)
+              (yason:encode-object-element "error" "Missing 'code' field"))))
+        (encode-result-plist (macroexpand-coalton code)))))
+
+;;;
+;;; Endpoint: disassemble-coalton
+;;;
+
+(defun handle-disassemble-coalton ()
+  "Handle POST /lisply/disassemble-coalton."
+  (json-content-type)
+  (let* ((json (parse-json-body))
+         (name (and json (gethash "name" json))))
+    (if (null name)
+        (with-output-to-string (s)
+          (yason:with-output (s)
+            (yason:with-object ()
+              (yason:encode-object-element "success" 'yason:false)
+              (yason:encode-object-element "error" "Missing 'name' field"))))
+        (encode-result-plist (disassemble-coalton name)))))
+
+;;;
+;;; Endpoint: load-file
+;;;
+
+(defun handle-load-file ()
+  "Handle POST /lisply/load-file."
+  (json-content-type)
+  (let* ((json (parse-json-body))
+         (path (and json (gethash "path" json)))
+         (package-name (and json (gethash "package" json))))
+    (if (null path)
+        (with-output-to-string (s)
+          (yason:with-output (s)
+            (yason:with-object ()
+              (yason:encode-object-element "success" 'yason:false)
+              (yason:encode-object-element "error" "Missing 'path' field"))))
+        (encode-result-plist (load-coalton-file path package-name)))))
 
 ;;;
 ;;; Endpoint: tools/list
@@ -182,7 +363,18 @@
    (hunchentoot:create-regex-dispatcher "^/lisply/lisp-eval$" #'handle-lisp-eval)
    (hunchentoot:create-regex-dispatcher "^/lisply/tools/list$" #'handle-tools-list)
    (hunchentoot:create-regex-dispatcher "^/lisply/docs/list$" #'handle-docs-list)
-   (hunchentoot:create-regex-dispatcher "^/lisply/docs/[^/]+$" #'handle-get-doc)))
+   (hunchentoot:create-regex-dispatcher "^/lisply/docs/[^/]+$" #'handle-get-doc)
+   ;; New tool endpoints
+   (hunchentoot:create-regex-dispatcher "^/lisply/type-of$" #'handle-type-of)
+   (hunchentoot:create-regex-dispatcher "^/lisply/list-definitions$" #'handle-list-definitions)
+   (hunchentoot:create-regex-dispatcher "^/lisply/apropos-coalton$" #'handle-apropos-coalton)
+   (hunchentoot:create-regex-dispatcher "^/lisply/reset-environment$" #'handle-reset-environment)
+   (hunchentoot:create-regex-dispatcher "^/lisply/type-check$" #'handle-type-check)
+   (hunchentoot:create-regex-dispatcher "^/lisply/multi-eval$" #'handle-multi-eval)
+   (hunchentoot:create-regex-dispatcher "^/lisply/describe-symbol$" #'handle-describe-symbol)
+   (hunchentoot:create-regex-dispatcher "^/lisply/macroexpand-coalton$" #'handle-macroexpand-coalton)
+   (hunchentoot:create-regex-dispatcher "^/lisply/disassemble-coalton$" #'handle-disassemble-coalton)
+   (hunchentoot:create-regex-dispatcher "^/lisply/load-file$" #'handle-load-file)))
 
 (defun start-server (&key (port *port*))
   "Start the Lisply HTTP backend on PORT."
@@ -190,6 +382,8 @@
     (format t "~&Stopping existing server...~%")
     (stop-server))
   (setf *port* port)
+  ;; Snapshot the environment at startup for reset support
+  (snapshot-environment)
   (let ((acceptor (make-instance 'hunchentoot:easy-acceptor
                                  :port port
                                  :taskmaster (make-instance 'hunchentoot:single-threaded-taskmaster)

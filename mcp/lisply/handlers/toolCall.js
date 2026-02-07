@@ -1,6 +1,6 @@
 /**
  * toolCall.js (v2)
- * 
+ *
  * Handler for tools/call requests
  */
 
@@ -11,6 +11,16 @@ const { handleHttpRequest } = require('./httpRequest');
 const { handleSkewedSearch } = require('./skewedSearch');
 const { handlePingLisp } = require('./ping');
 const { handleLispEval } = require('./lispEval');
+const { handleTypeOf } = require('./typeOf');
+const { handleListDefinitions } = require('./listDefinitions');
+const { handleAproposCoalton } = require('./aproposCoalton');
+const { handleResetEnvironment } = require('./resetEnvironment');
+const { handleTypeCheck } = require('./typeCheck');
+const { handleMultiEval } = require('./multiEval');
+const { handleDescribeSymbol } = require('./describeSymbol');
+const { handleMacroexpandCoalton } = require('./macroexpandCoalton');
+const { handleDisassembleCoalton } = require('./disassembleCoalton');
+const { handleLoadFile } = require('./loadFile');
 
 /**
  * Handle tool calls
@@ -18,13 +28,13 @@ const { handleLispEval } = require('./lispEval');
 function handleToolCall(request, config, logger) {
   const toolName = request.params?.name;
   const args = request.params?.arguments || {};
-  
+
   logger.info(`Handling tool call: ${toolName}`);
-  
+
   // Extract original tool name (remove server prefix)
   const originalToolName = extractOriginalToolName(toolName);
   logger.debug(`Original tool name: ${originalToolName}`);
-  
+
   try {
     switch (originalToolName) {
       case 'lisp_eval':
@@ -39,6 +49,26 @@ function handleToolCall(request, config, logger) {
         return handleGetDocs(request, args, config, logger);
       case 'skewed_search':
         return handleSkewedSearch(request, args, config, logger);
+      case 'type_of':
+        return handleTypeOf(request, args, config, logger);
+      case 'list_definitions':
+        return handleListDefinitions(request, args, config, logger);
+      case 'apropos_coalton':
+        return handleAproposCoalton(request, args, config, logger);
+      case 'reset_environment':
+        return handleResetEnvironment(request, args, config, logger);
+      case 'type_check_only':
+        return handleTypeCheck(request, args, config, logger);
+      case 'multi_eval':
+        return handleMultiEval(request, args, config, logger);
+      case 'describe_symbol':
+        return handleDescribeSymbol(request, args, config, logger);
+      case 'macroexpand_coalton':
+        return handleMacroexpandCoalton(request, args, config, logger);
+      case 'disassemble_coalton':
+        return handleDisassembleCoalton(request, args, config, logger);
+      case 'load_file':
+        return handleLoadFile(request, args, config, logger);
       default:
         sendErrorResponse(request, -32601, `Unknown tool: ${toolName}`, logger);
     }
@@ -53,29 +83,29 @@ function handleToolCall(request, config, logger) {
  */
 function handleGetDocsList(request, config, logger) {
   logger.info('Handling get_docs_list');
-  
+
   const { hostname, port } = getBackendConnectionInfo(config, logger);
-  
+
   const options = {
     hostname,
     port,
     path: `${config.BASE_PATH}/docs/list`,
     method: 'GET'
   };
-  
+
   makeHttpRequest(options, null, (error, response) => {
     if (error) {
       sendErrorResponse(request, -32603, `Error fetching docs list: ${error.message}`, logger);
       return;
     }
-    
+
     let content;
     try {
       content = JSON.parse(response.content);
     } catch (e) {
       content = response.content;
     }
-    
+
     sendStandardResponse(request, {
       content: [{
         type: 'text',
@@ -90,29 +120,29 @@ function handleGetDocsList(request, config, logger) {
  */
 function handleGetDocs(request, args, config, logger) {
   const { id } = args;
-  
+
   logger.info(`Handling get_docs for: ${id}`);
-  
+
   if (!id) {
     sendErrorResponse(request, -32602, 'Missing required parameter: id', logger);
     return;
   }
-  
+
   const { hostname, port } = getBackendConnectionInfo(config, logger);
-  
+
   const options = {
     hostname,
     port,
     path: `${config.BASE_PATH}/docs/${encodeURIComponent(id)}`,
     method: 'GET'
   };
-  
+
   makeHttpRequest(options, null, (error, response) => {
     if (error) {
       sendErrorResponse(request, -32603, `Error fetching docs: ${error.message}`, logger);
       return;
     }
-    
+
     sendStandardResponse(request, {
       content: [{
         type: 'text',
