@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "jynx": {
+      "command": "node",
+      "args": [
+        "./mcp/lisply/mcp-wrapper.js",
+        "--server-name", "jynx",
+        "--http-host-port", "9081",
+        "--debug"
+      ]
+    }
+  }
+}

@@ -17,3 +17,6 @@ coverage-report/
 benchmarks/benchmarks-game/pidigits
 
 bench.json
+
+# MCP / Node
+node_modules/
