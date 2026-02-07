@@ -1,0 +1,12 @@
+#!/bin/bash
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+cd "$PROJECT_DIR"
+PORT="${1:-9081}"
+echo "Starting Jynx Lisply backend on port $PORT..."
+exec qlot exec sbcl --noinform \
+    --eval "(require :asdf)" \
+    --eval "(ql:quickload :hunchentoot :silent t)" \
+    --eval "(asdf:load-system :jynx-lisply)" \
+    --eval "(jynx-lisply:start-server :port $PORT)" \
+    --eval "(loop (sleep 3600))"
