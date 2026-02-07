@@ -410,7 +410,7 @@
          :for repr-type
            := (and repr (parser:keyword-src-name (parser:attribute-repr-type repr)))
          :for repr-arg
-           := (and repr (eq repr-type :native) (cst:raw (parser:attribute-repr-arg repr)))
+           := (and repr (eq repr-type :native) (parser:syntax->datum (parser:attribute-repr-arg repr)))
 
 
          ;; Apply ksubs to find the type of each constructor

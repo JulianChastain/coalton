@@ -36,17 +36,19 @@
                              (:file "package")))
                (:module "parser"
                 :serial t
-                :components ((:file "base")
+                :components (;; Syntax objects for hygienic macros (must load before base)
+                             (:file "scope")
+                             (:file "syntax-object")
+                             (:file "syntax-cst")
+                             ;; Base parser utilities
+                             (:file "base")
                              (:file "cursor")
                              (:file "reader")
                              (:file "types")
                              (:file "pattern")
-                             ;; Syntax objects for hygienic macros
-                             (:file "scope")
-                             (:file "syntax-object")
+                             ;; Binding infrastructure
                              (:file "binding-table")
                              (:file "definition-context")
-                             (:file "syntax-cst")
                              ;; Macro expansion
                              (:file "macro")
                              (:file "syntax-case")

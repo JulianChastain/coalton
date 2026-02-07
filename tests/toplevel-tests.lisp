@@ -5,7 +5,8 @@
   (let ((source (source:make-source-string string :name "test")))
     (with-open-stream (stream (source:source-stream source))
       (parser:with-reader-context stream
-        (funcall fn (parser:maybe-read-form stream parser::*coalton-eclector-client*) source)))))
+        (let ((cst (parser:maybe-read-form stream parser::*coalton-eclector-client*)))
+          (funcall fn (and cst (coalton-impl/parser/syntax-cst:cst->syntax cst)) source))))))
 
 (defun parse-package (string)
   (parse-form string

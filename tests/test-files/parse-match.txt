@@ -62,7 +62,7 @@ error: Malformed match branch
 
 --------------------------------------------------------------------------------
 
-error: Malformed match branch
+error: Malformed list
   --> test:5:4
    |
  5 |      (x y . z)))

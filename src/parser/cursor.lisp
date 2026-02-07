@@ -1,8 +1,8 @@
-;;;; Utilities for incremental consumption of concrete syntax tree
-;;;; values.  A cursor maintains a reference to a value, and optionally
-;;;; to a position within it, if it is cons-valued. The functions
-;;;; 'next' and 'empty-p' are sufficient to build specialized parsing
-;;;; functions that don't need knowledge of the cst package.
+;;;; Utilities for incremental consumption of syntax object values.
+;;;; A cursor maintains a reference to a value, and optionally to a
+;;;; position within it, if it is list-valued. The functions 'next'
+;;;; and 'empty-p' are sufficient to build specialized parsing
+;;;; functions that don't need knowledge of the syntax-object package.
 ;;;;
 ;;;; Example of a parser for expressions like "(sym* -> sym*)"
 ;;;;
@@ -19,9 +19,10 @@
   (:shadow
    #:error)
   (:local-nicknames
-   (#:cst #:concrete-syntax-tree)
    (#:source #:coalton-impl/source)
-   (#:util #:coalton-impl/util))
+   (#:util #:coalton-impl/util)
+   (#:stx #:coalton-impl/parser/syntax-object)
+   (#:stx-cst #:coalton-impl/parser/syntax-cst))
   (:shadowing-import-from
    #:coalton-impl/parser/base
    #:parse-error)
@@ -45,24 +46,24 @@
 
 (in-package #:coalton-impl/parser/cursor)
 
-;;; The value field can be any type returned by cst, generally a cons
-;;; or atom.  When value is a cst:cons, pointer initially points to
-;;; that value, and is destructively updated as values are 'popped'.
+;;; The value field is a syntax object. When value wraps a list,
+;;; pointer initially points to that value, and is destructively
+;;; updated as values are 'popped'.
 
 (defstruct (cursor (:constructor %make-cursor))
-  "A CST node-valued cursor."
-  (value   (util:required 'value)   :type cst:cst) ; current value
-  (pointer (util:required 'value)   :type cst:cst) ; pointer into current value
-  (last    nil            :type (or null cst:cst)) ; pointer to most recently consumed value
-  (source  (util:required 'source))                ; the source:location of cursor
-  (message (util:required 'message) :type string)) ; a message providing context for errors
+  "A syntax-object-valued cursor."
+  (value   (util:required 'value)   :type stx:syntax-object) ; current value
+  (pointer (util:required 'value)   :type stx:syntax-object) ; pointer into current value
+  (last    nil            :type (or null stx:syntax-object))  ; most recently consumed value
+  (source  (util:required 'source))                           ; the source:location of cursor
+  (message (util:required 'message) :type string))            ; context for errors
 
 ;;; The implementation of source:location for a cursor returns the
 ;;; entire span of the cursor.
 
 (defmethod source:location ((self cursor))
   (source:make-location (cursor-source self)
-                        (cst:source (cursor-value self))))
+                        (stx-cst:stx-source (cursor-value self))))
 
 (defun make-cursor (value source message)
   "Make a cursor that points at VALUE."
@@ -75,33 +76,33 @@
   "Peek at the value of CURSOR without changing any state."
   (declare (type cursor cursor))
   (unless (empty-p cursor)
-    (let ((value (cst:first (cursor-pointer cursor))))
-      (when unwrap
-        (setf value (cst:raw value)))
-      value)))
+    (let ((value (stx-cst:stx-first (cursor-pointer cursor))))
+      (if unwrap
+          (stx:syntax-e value)
+          value))))
 
 (defun atom-p (cursor)
   "Return T if cursor is pointing at an atom."
-  (cst:atom (cursor-pointer cursor)))
+  (stx-cst:stx-atom-p (cursor-pointer cursor)))
 
 (defun proper-list-p (cursor)
   "Return T if cursor is pointing at a proper list."
-  (cst:proper-list-p (cursor-pointer cursor)))
+  (stx-cst:stx-proper-list-p (cursor-pointer cursor)))
 
 (defun empty-p (cursor)
   "T if CURSOR has no next value."
   (declare (type cursor cursor))
   (let ((pointer (cursor-pointer cursor)))
-    (or (not (cst:consp pointer))
-        (null (cst:first pointer)))))
+    (or (not (stx-cst:stx-consp pointer))
+        (null (stx-cst:stx-first pointer)))))
 
 (defun cursor-location (cursor)
   "Return the location of the value that CURSOR is pointing at."
   (source:make-location (cursor-source cursor)
                         (cond ((cursor-last cursor)
-                               (cst:source (cursor-last cursor)))
+                               (stx-cst:stx-source (cursor-last cursor)))
                               (t
-                               (let ((s (cst:source (cursor-value cursor))))
+                               (let ((s (stx-cst:stx-source (cursor-value cursor))))
                                  (cons (1+ (car s))
                                        (1+ (car s))))))))
 
@@ -112,10 +113,10 @@
      (cursor-location cursor))
     (:next
      (source:make-location (cursor-source cursor)
-                           (cst:source (cst:first (cursor-pointer cursor)))))
+                           (stx-cst:stx-source (stx-cst:stx-first (cursor-pointer cursor)))))
     (:form
      (source:make-location (cursor-source cursor)
-                           (cst:source (cursor-value cursor))))
+                           (stx-cst:stx-source (cursor-value cursor))))
     (:after-last
      (source:end-location (cursor-location cursor)))))
 
@@ -136,32 +137,32 @@ Position is one of:
   "Return the next value from a nonempty cursor.
 
 If PRED is non-NIL, only consume a value if it is true.
-If UNWRAP is NIL, return the CST node, otherwise, return the raw value."
+If UNWRAP is NIL, return the syntax object, otherwise, return the datum."
   (declare (type cursor cursor))
   (when (empty-p cursor)
     ;; Finding empty-p = t here this would indicate that the compiler
     ;; writer hasn't checked for emptiness in the calling context in
     ;; order to construct a more specific error message.
     (error cursor ':after-last "attempt to read past end of list"))
-  (let ((value (cst:first (cursor-pointer cursor))))
+  (let ((value (stx-cst:stx-first (cursor-pointer cursor))))
     (when (or (null pred)
-              (funcall pred (cst:raw value)))
+              (funcall pred (stx:syntax-e value)))
       (setf (cursor-pointer cursor)
-            (cst:rest (cursor-pointer cursor))
+            (stx-cst:stx-rest (cursor-pointer cursor))
             (cursor-last cursor)
             value)
-      (if unwrap (cst:raw value) value))))
+      (if unwrap (stx:syntax-e value) value))))
 
 (defun %ensure-proper-list (cursor)
   "Enforce that CURSOR points at a proper list before iterating. Empty lists are allowed."
-  (unless (null (cst:raw (cursor-pointer cursor)))
+  (unless (null (stx:syntax-e (cursor-pointer cursor)))
     (when (atom-p cursor)
       (error cursor ':form "expected a list"))
     (unless (proper-list-p cursor)
       (error cursor ':form "unexpected dotted list"))))
 
 (defun each (cursor f)
-  "For each element in cons-valued CURSOR, create a subcursor and apply F."
+  "For each element in list-valued CURSOR, create a subcursor and apply F."
   (%ensure-proper-list cursor)
   (loop :until (empty-p cursor)
         :do (let ((value (next cursor :unwrap nil)))
@@ -205,4 +206,4 @@ Signal a condition with MESSAGE if a symbol is not present."
     :test (lambda (value)
             (or (and value (symbolp value))
                 (error cursor ':next "expected symbol")))
-    :key #'cst:raw))
+    :key #'stx:syntax-e))

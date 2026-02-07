@@ -231,7 +231,7 @@ error: Malformed expression
 
 --------------------------------------------------------------------------------
 
-error: Malformed expression
+error: Malformed list
   --> test:3:10
    |
  3 |  (define x (f . x))
@@ -263,7 +263,7 @@ error: Invalid literal
 
 --------------------------------------------------------------------------------
 
-error: Malformed expression
+error: Malformed list
   --> test:3:10
    |
  3 |  (define x (f . 3))

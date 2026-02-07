@@ -76,50 +76,47 @@ These are custom bindings that can be retrieved with syntax-local-value.")
 
 (defun expand-macro (form source)
   "Expand the macro in FORM using MACROEXPAND-1, trying our best to preserve source information."
-  (declare (type cst:cst form)
-           (values cst:cst &optional))
+  (declare (type stx:syntax-object form)
+           (values stx:syntax-object &optional))
   (let (;; Fallback to the macro source if unable to find something more specific.
-        (fallback-source (cst:source form))
+        (fallback-source (stx-cst:stx-source form))
         ;; Table mapping forms within FORM to their sources. We will
         ;; check pointer equality of forms in the output of the macro
         ;; to these to retrieve source information.
         (source-table (make-hash-table :test #'eq)))
     (fill-source-table form source-table (make-hash-table :test #'eq))
     (handler-case
-        (rebuild-cst (macroexpand-1 (cst:raw form))
-                     source-table
-                     fallback-source
-                     (make-hash-table :test #'eq))
+        (rebuild-syntax (macroexpand-1 (stx:syntax->datum form))
+                        source-table
+                        fallback-source
+                        (make-hash-table :test #'eq))
       (error (condition)
         (parse-error "Error during macro expansion"
                      (note source form (princ-to-string condition)))))))
 
-(defun fill-source-table (cst source-table seen-forms)
-  "Fill SOURCE-TABLE with source information in CST and its children."
-  (declare (type cst:cst cst)
+(defun fill-source-table (stx source-table seen-forms)
+  "Fill SOURCE-TABLE with source information in STX and its children."
+  (declare (type stx:syntax-object stx)
            (type hash-table source-table))
   (cond
     ;; If we have already seen this form then skip it.
-    ((gethash cst seen-forms)
+    ((gethash stx seen-forms)
      nil)
     (t
+     (setf (gethash stx seen-forms) t)
      ;; When forms appear multiple times the later ones don't have any
      ;; source information. We can safely ignore these.
-     (unless (or (cst:null cst)
-                 (nth-value 1 (gethash (cst:raw cst) source-table)))
-       (setf (gethash (cst:raw cst) source-table) (cst:source cst)))
-     (when (cst:consp cst)
-       (loop :for tail := cst :then (cst:rest tail)
-             :while (cst:consp tail)
-             :do (fill-source-table (cst:first tail) source-table seen-forms)
-             :finally
-                ;; Only walk the last form if it is not null. This is
-                ;; only the case in dotted lists.
-                (unless (cst:null tail)
-                  (fill-source-table tail source-table seen-forms)))))))
+     (let ((datum (stx:syntax-e stx)))
+       (unless (or (null datum)
+                   (nth-value 1 (gethash datum source-table)))
+         (setf (gethash datum source-table) (stx-cst:stx-source stx)))
+       (when (and (listp datum) datum)
+         (dolist (child datum)
+           (when (stx:syntax-object-p child)
+             (fill-source-table child source-table seen-forms))))))))
 
-(defun rebuild-cst (form source-table fallback-source seen-forms)
-  "Rebuild a CST from the FORM.
+(defun rebuild-syntax (form source-table fallback-source seen-forms)
+  "Rebuild a syntax object from the expanded FORM.
 
 SOURCE-TABLE contains a pointer mapping from macro input forms to source information.
 FALLBACK-SOURCE is the source information of the macro to use as a fallback.
@@ -127,25 +124,22 @@ SEEN-FORMS is a hash table of known forms to prevent hang on cyclical list forms
   (declare (type (or atom list) form)
            (type hash-table source-table seen-forms)
            (type cons fallback-source)
-           (values cst:cst &optional))
+           (values stx:syntax-object &optional))
   (let ((source (gethash form source-table fallback-source)))
     (cond ((nth-value 1 (gethash form seen-forms))
-           (gethash form seen-forms))
+           (values (gethash form seen-forms)))
           ((atom form)
-           (make-instance
-            'cst:atom-cst
-            :raw form
-            :source source))
+           (let ((result (stx:make-syntax-object form :source source)))
+             (setf (gethash form seen-forms) result)
+             result))
           (t
-           (let ((result (make-instance
-                          'cst:cons-cst
-                          :raw form
+           (let ((result (stx:make-syntax-object
+                          (mapcar (lambda (elem)
+                                    (rebuild-syntax elem source-table fallback-source seen-forms))
+                                  form)
                           :source source)))
              (setf (gethash form seen-forms) result)
-             (reinitialize-instance
-              result
-              :first (rebuild-cst (car form) source-table fallback-source seen-forms)
-              :rest (rebuild-cst (cdr form) source-table fallback-source seen-forms)))))))
+             result)))))
 
 ;;;
 ;;; Hygienic Macro Expansion
@@ -413,25 +407,22 @@ Returns a function that takes a syntax object and returns a syntax object."
       (stx:datum->syntax stx expanded))))
 
 (defun expand-macro-hygienic-wrapper (form source)
-  "Expand FORM hygienically, converting between CST and syntax objects.
+  "Expand FORM hygienically using the sets-of-scopes algorithm.
 
-FORM is a CST representing the macro invocation.
+FORM is a syntax object representing the macro invocation.
 SOURCE is the source information context (reserved for future use).
 
 This is the main entry point for hygienic macro expansion in the parser.
 It:
-1. Converts the CST to a syntax object
-2. Creates a transformer that calls CL's macroexpand-1
-3. Expands hygienically using the flip algorithm
-4. Converts the result back to a CST for the parser"
-  (declare (type cst:cst form)
+1. Creates a transformer that calls CL's macroexpand-1
+2. Expands hygienically using the flip algorithm
+3. Returns the expanded syntax object directly"
+  (declare (type stx:syntax-object form)
            (ignore source)
-           (values cst:cst))
-  (let* ((stx (stx-cst:cst->syntax form))
-         (transformer (make-cl-macro-transformer (cst:raw form)))
-         (expanded-stx (expand-macro-hygienic stx transformer))
-         (fallback-source (cst:source form)))
-    (syntax->cst expanded-stx fallback-source)))
+           (values stx:syntax-object))
+  (let* ((transformer (make-cl-macro-transformer (stx:syntax->datum form)))
+         (expanded-stx (expand-macro-hygienic form transformer)))
+    expanded-stx))
 
 ;;;
 ;;; Local Expansion Control (Phase 3)

@@ -9,6 +9,7 @@
   (:use #:cl)
   (:local-nicknames
    (#:cst #:concrete-syntax-tree)
+   (#:source #:coalton-impl/source)
    (#:scope #:coalton-impl/parser/scope)
    (#:stx #:coalton-impl/parser/syntax-object))
   (:export
@@ -46,6 +47,13 @@
    #:stx-symbol                           ; FUNCTION
    #:stx-symbol-name                      ; FUNCTION
    #:stx-keyword                          ; FUNCTION
+
+   ;; Additional list operations
+   #:stx-nthrest                          ; FUNCTION
+   #:stx-listify                          ; FUNCTION
+   #:stx-proper-list-p                    ; FUNCTION
+   #:stx-head-symbol                      ; FUNCTION
+   #:stx-source-range                     ; FUNCTION
 
    ;; Conversion from CST
    #:cst->syntax                          ; FUNCTION
@@ -204,6 +212,60 @@ Returns a new syntax object wrapping the concatenated list."
                       datum))
                   lists))))
 
+(defun stx-nthrest (n stx)
+  "Skip the first N elements of a list syntax object, returning the rest.
+
+The resulting syntax object has the same scopes and source as STX."
+  (declare (type (integer 0) n)
+           (type stx:syntax-object stx)
+           (values stx:syntax-object))
+  (let ((datum (stx:syntax-e stx)))
+    (unless (listp datum)
+      (error "STX-NTHREST: not a list syntax: ~S" stx))
+    (stx:make-syntax-object
+     (nthcdr n datum)
+     :scopes (stx:syntax-object-scopes stx)
+     :source (stx:syntax-object-source stx))))
+
+(defun stx-listify (stx)
+  "Extract the CL list of child syntax objects from a list syntax object."
+  (declare (type stx:syntax-object stx)
+           (values list))
+  (let ((datum (stx:syntax-e stx)))
+    (unless (listp datum)
+      (error "STX-LISTIFY: not a list syntax: ~S" stx))
+    datum))
+
+(defun stx-proper-list-p (stx)
+  "Return T if STX wraps a proper list.
+Dotted lists are rejected during CST->syntax conversion, so this
+always returns T for list datums."
+  (declare (type stx:syntax-object stx)
+           (values boolean))
+  (listp (stx:syntax-e stx)))
+
+(defun stx-head-symbol (stx)
+  "If STX is a non-empty list syntax whose first element is an atom, return that symbol.
+Otherwise return NIL."
+  (declare (type stx:syntax-object stx)
+           (values (or null symbol)))
+  (let ((datum (stx:syntax-e stx)))
+    (when (and (listp datum) datum)
+      (let ((head (car datum)))
+        (when (stx:syntax-object-p head)
+          (let ((head-datum (stx:syntax-e head)))
+            (when (symbolp head-datum)
+              head-datum)))))))
+
+(defun stx-source-range (stx-list)
+  "Return a span covering the range from the first to the last element in STX-LIST.
+STX-LIST is a CL list of syntax objects."
+  (declare (type list stx-list)
+           (values cons))
+  (cons
+   (car (stx:syntax-object-source (first stx-list)))
+   (cdr (stx:syntax-object-source (car (last stx-list))))))
+
 ;;;
 ;;; Mapping and Traversal
 ;;;
@@ -298,19 +360,27 @@ F takes (accumulator element) and returns new accumulator."
 ;;; preserving source location information.
 ;;;
 
-(defun cst->syntax (cst)
+(defun cst->syntax (cst &optional file-source)
   "Convert a CST node to a syntax object with empty scopes.
 
 This recursively converts the entire CST tree, wrapping each node
-in a syntax object and preserving source locations."
+in a syntax object and preserving source locations.
+FILE-SOURCE, if provided, is the source:source object for error reporting."
   (declare (type cst:cst cst)
            (values stx:syntax-object))
-  (cst->syntax-with-scopes cst (scope:empty-scope-set)))
+  (cst->syntax-impl cst (scope:empty-scope-set) file-source))
 
 (defun cst->syntax-with-scopes (cst scopes)
   "Convert a CST node to a syntax object with the given SCOPES.
 
 This recursively converts the entire CST tree."
+  (declare (type cst:cst cst)
+           (type scope:scope-set scopes)
+           (values stx:syntax-object))
+  (cst->syntax-impl cst scopes nil))
+
+(defun cst->syntax-impl (cst scopes file-source)
+  "Internal: Convert a CST node to a syntax object."
   (declare (type cst:cst cst)
            (type scope:scope-set scopes)
            (values stx:syntax-object))
@@ -331,10 +401,17 @@ This recursively converts the entire CST tree."
        (stx:make-syntax-object
         (loop :for tail := cst :then (cst:rest tail)
               :while (cst:consp tail)
-              :collect (cst->syntax-with-scopes (cst:first tail) scopes)
+              :collect (cst->syntax-impl (cst:first tail) scopes file-source)
               :finally
-                 ;; Handle dotted lists (rare in practice)
                  (unless (cst:null tail)
-                   (error "Dotted lists not supported in syntax conversion")))
+                   ;; Dotted pair: signal a parse error.
+                   ;; Syntax objects only support proper lists, so we
+                   ;; detect dotted lists here and report them.
+                   (if file-source
+                       (source:error "Malformed list"
+                                     (source:note
+                                      (source:make-location file-source (cst:source cst))
+                                      "unexpected dotted list"))
+                       (cl:error "Unexpected dotted list in CST conversion"))))
         :scopes scopes
         :source source)))))

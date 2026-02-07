@@ -366,7 +366,7 @@ error: Malformed method definition
 
 --------------------------------------------------------------------------------
 
-error: Malformed class definition
+error: Malformed list
   --> test:3:14
    |
  3 |  (define-class (C :a . :b))
@@ -398,7 +398,7 @@ error: Malformed functional dependency
 
 --------------------------------------------------------------------------------
 
-error: Malformed functional dependency
+error: Malformed list
   --> test:3:23
    |
  3 |  (define-class (C :a :b (:a :b . :c)))

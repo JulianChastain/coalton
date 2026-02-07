@@ -9,7 +9,8 @@
    #:coalton-impl/parser/base
    #:parse-error)
   (:local-nicknames
-   (#:cst #:concrete-syntax-tree)
+   (#:stx #:coalton-impl/parser/syntax-object)
+   (#:stx-cst #:coalton-impl/parser/syntax-cst)
    (#:source #:coalton-impl/source)
    (#:util #:coalton-impl/util)
    (#:const #:coalton-impl/constants))
@@ -229,7 +230,7 @@
 
 (declaim (type util:symbol-list *loop-label-context*))
 (defvar *loop-label-context* nil
-  "A list of known labels encountered during parse. 
+  "A list of known labels encountered during parse.
 
 Parsing (BREAK label) and (CONTINUE label) forms fails unless the label is found in
 this list.
@@ -262,7 +263,7 @@ Rebound to NIL parsing an anonymous FN.")
 ;;;;             | node-abstraction
 ;;;;             | node-let
 ;;;;             | node-rec
-;;;;             | node-lisp 
+;;;;             | node-lisp
 ;;;;             | node-match
 ;;;;             | node-progn
 ;;;;             | node-the
@@ -770,7 +771,7 @@ BODY: Expression to evaluate with the captured continuation"
   (body     (util:required 'body)     :type node-body     :read-only t))
 
 (defun parse-expression (form source)
-  (declare (type cst:cst form)
+  (declare (type stx:syntax-object form)
            (values node &optional))
 
   (cond
@@ -778,14 +779,14 @@ BODY: Expression to evaluate with the captured continuation"
     ;; Atoms
     ;;
 
-    ((cst:atom form)
-     (typecase (cst:raw form)
+    ((stx-cst:stx-atom-p form)
+     (typecase (stx:syntax-e form)
        (null
         (parse-error "Malformed expression"
                      (note source form "unexpected `nil` or `()`")))
 
        (symbol
-        (if (char= #\. (aref (symbol-name (cst:raw form)) 0))
+        (if (char= #\. (aref (symbol-name (stx:syntax-e form)) 0))
             (parse-accessor form source)
             (parse-variable form source)))
 
@@ -796,7 +797,7 @@ BODY: Expression to evaluate with the captured continuation"
     ;; Dotted Lists
     ;;
 
-    ((not (cst:proper-list-p form))
+    ((not (stx-cst:stx-proper-list-p form))
      (parse-error "Malformed expression"
                   (note source form "unexpected dotted list")))
 
@@ -804,30 +805,30 @@ BODY: Expression to evaluate with the captured continuation"
     ;; Keywords
     ;;
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:fn (cst:raw (cst:first form))))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:fn (stx:syntax-e (stx-cst:stx-first form))))
      (let ((params)
            (body))
 
        ;; (fn)
-       (unless (cst:consp (cst:rest form))
+       (unless (stx-cst:stx-consp (stx-cst:stx-rest form))
          (parse-error "Malformed function"
-                      (note-end source (cst:first form) "expected function arguments")))
+                      (note-end source (stx-cst:stx-first form) "expected function arguments")))
 
        ;; (fn (...))
-       (unless (cst:consp (cst:rest (cst:rest form)))
+       (unless (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest form)))
          (parse-error "Malformed function"
-                      (note-end source (cst:second form) "expected function body")))
+                      (note-end source (stx-cst:stx-second form) "expected function body")))
 
        ;; (fn x ...)
        ;;
        ;; NOTE: (fn () ...) is allowed
-       (when (and (cst:atom (cst:second form))
-                  (not (null (cst:raw (cst:second form)))))
+       (when (and (stx-cst:stx-atom-p (stx-cst:stx-second form))
+                  (not (null (stx:syntax-e (stx-cst:stx-second form)))))
          (parse-error "Malformed function"
-                      (note source (cst:second form)
+                      (note source (stx-cst:stx-second form)
                             "malformed argument list")
-                      (help source (cst:second form)
+                      (help source (stx-cst:stx-second form)
                             (lambda (existing)
                               (concatenate 'string "(" existing ")"))
                             "add parentheses")))
@@ -835,138 +836,138 @@ BODY: Expression to evaluate with the captured continuation"
        ;; or CONTINUING with loops that enclose the FN form.
        (let ((*loop-label-context* nil))
          (setf params
-               (loop :for vars := (cst:second form) :then (cst:rest vars)
-                     :while (cst:consp vars)
-                     :collect (parse-pattern (cst:first vars) source)))
-         (setf body (parse-body (cst:nthrest 2 form) form source))
+               (loop :for vars := (stx-cst:stx-second form) :then (stx-cst:stx-rest vars)
+                     :while (stx-cst:stx-consp vars)
+                     :collect (parse-pattern (stx-cst:stx-first vars) source)))
+         (setf body (parse-body (stx-cst:stx-nthrest 2 form) form source))
          (make-node-abstraction
           :params params
           :body body
           :location (form-location source form)))))
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:throw (cst:raw (cst:first form))))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:throw (stx:syntax-e (stx-cst:stx-first form))))
      (let (expr)
 
        ;; (throw)
-       (unless (cst:consp (cst:rest form))
+       (unless (stx-cst:stx-consp (stx-cst:stx-rest form))
          (parse-error "Malformed throw expression"
-                      (note source (cst:first form) "expression expected")))
+                      (note source (stx-cst:stx-first form) "expression expected")))
 
-       (setf expr (parse-expression (cst:second form) source))
+       (setf expr (parse-expression (stx-cst:stx-second form) source))
 
        ;; (throw a b ...)
-       (when (cst:consp (cst:rest (cst:rest form)))
+       (when (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest form)))
          (parse-error "Malformed throw expression"
-                      (note source (cst:first (cst:rest (cst:rest form)))
+                      (note source (stx-cst:stx-first (stx-cst:stx-rest (stx-cst:stx-rest form)))
                             "unexpected trailing form")))
 
        (make-node-throw
         :expr expr
         :location (form-location source form))))
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:resume-to (cst:raw (cst:first form))))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:resume-to (stx:syntax-e (stx-cst:stx-first form))))
      (let (expr)
 
        ;; (resume-to)
-       (unless (cst:consp (cst:rest form))
+       (unless (stx-cst:stx-consp (stx-cst:stx-rest form))
 
          (parse-error "Malformed resume-to expression"
-                      (note-end source (cst:first form) "expression expected")))
+                      (note-end source (stx-cst:stx-first form) "expression expected")))
 
-       (setf expr (parse-expression (cst:second form) source))
-       
+       (setf expr (parse-expression (stx-cst:stx-second form) source))
+
        ;; (resume-to a b ...)
-       (when (cst:consp (cst:rest (cst:rest form)))
+       (when (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest form)))
          (parse-error "Malformed resume-to expression"
-                      (note source (cst:first (cst:rest (cst:rest form)))
+                      (note source (stx-cst:stx-first (stx-cst:stx-rest (stx-cst:stx-rest form)))
                             "unexpected trailing form")))
 
        (make-node-resume-to
         :expr expr
         :location (form-location source form))))
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:resumable (cst:raw (cst:first form))))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:resumable (stx:syntax-e (stx-cst:stx-first form))))
 
      ;; (resumable)
-     (unless (cst:consp (cst:rest form))
+     (unless (stx-cst:stx-consp (stx-cst:stx-rest form))
        (parse-error "Malformed resumable expression"
-                    (note-end source (cst:first form) "expected expression")))
+                    (note-end source (stx-cst:stx-first form) "expected expression")))
 
      ;; (resumable expr)
-     (unless (cst:consp (cst:rest (cst:rest form)))
+     (unless (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest form)))
        (parse-error "Malformed resumable expression"
-                    (note-end source (cst:second form) "expected resumeable cases")))
+                    (note-end source (stx-cst:stx-second form) "expected resumeable cases")))
 
      (make-node-resumable
-      :expr (parse-expression (cst:second form) source)
-      :branches (loop :for branches := (cst:nthrest 2 form) :then (cst:rest branches)
-                      :while (cst:consp branches)
-                      :collect (parse-resumable-branch (cst:first branches) source))
+      :expr (parse-expression (stx-cst:stx-second form) source)
+      :branches (loop :for branches := (stx-cst:stx-nthrest 2 form) :then (stx-cst:stx-rest branches)
+                      :while (stx-cst:stx-consp branches)
+                      :collect (parse-resumable-branch (stx-cst:stx-first branches) source))
       :location (form-location source form)))
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:catch (cst:raw (cst:first form))))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:catch (stx:syntax-e (stx-cst:stx-first form))))
 
      ;; (catch)
-     (unless (cst:consp (cst:rest form))
+     (unless (stx-cst:stx-consp (stx-cst:stx-rest form))
        (parse-error "Malformed catch expression"
-                    (note-end source (cst:first form) "expected expression")))
-     
+                    (note-end source (stx-cst:stx-first form) "expected expression")))
+
      ;; (catch expr)
-     (unless (cst:consp (cst:rest (cst:rest form)))
+     (unless (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest form)))
        (parse-error "Malformed catch expression"
-                    (note-end source (cst:second form) "expected catch cases")))
-     
+                    (note-end source (stx-cst:stx-second form) "expected catch cases")))
+
 
      (make-node-catch
-      :expr (parse-expression (cst:second form) source)
-      :branches (loop :for branches := (cst:nthrest 2 form) :then (cst:rest branches)
-                      :while (cst:consp branches)
-                      :collect (parse-catch-branch (cst:first branches) source))
+      :expr (parse-expression (stx-cst:stx-second form) source)
+      :branches (loop :for branches := (stx-cst:stx-nthrest 2 form) :then (stx-cst:stx-rest branches)
+                      :while (stx-cst:stx-consp branches)
+                      :collect (parse-catch-branch (stx-cst:stx-first branches) source))
       :location (form-location source form)))
 
     ;;
     ;; Algebraic Effects: perform and handle
     ;;
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:perform (cst:raw (cst:first form))))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:perform (stx:syntax-e (stx-cst:stx-first form))))
 
      ;; (perform)
-     (unless (cst:consp (cst:rest form))
+     (unless (stx-cst:stx-consp (stx-cst:stx-rest form))
        (parse-error "Malformed perform expression"
-                    (note-end source (cst:first form) "expected effect operation")))
+                    (note-end source (stx-cst:stx-first form) "expected effect operation")))
 
-     (let* ((effect-form (cst:second form))
+     (let* ((effect-form (stx-cst:stx-second form))
             (effect-name nil)
             (effect-arg nil))
 
        ;; Parse effect operation: either EFFECT.OP or (EFFECT.OP arg)
        (cond
          ;; (perform EFFECT.OP) - nullary effect operation
-         ((cst:atom effect-form)
-          (unless (symbolp (cst:raw effect-form))
+         ((stx-cst:stx-atom-p effect-form)
+          (unless (symbolp (stx:syntax-e effect-form))
             (parse-error "Malformed perform expression"
                          (note source effect-form "expected effect operation symbol")))
-          (setf effect-name (cst:raw effect-form)))
+          (setf effect-name (stx:syntax-e effect-form)))
 
          ;; (perform (EFFECT.OP arg)) - effect operation with argument
-         ((cst:consp effect-form)
-          (unless (and (cst:atom (cst:first effect-form))
-                       (symbolp (cst:raw (cst:first effect-form))))
+         ((stx-cst:stx-consp effect-form)
+          (unless (and (stx-cst:stx-atom-p (stx-cst:stx-first effect-form))
+                       (symbolp (stx:syntax-e (stx-cst:stx-first effect-form))))
             (parse-error "Malformed perform expression"
-                         (note source (cst:first effect-form) "expected effect operation symbol")))
-          (setf effect-name (cst:raw (cst:first effect-form)))
+                         (note source (stx-cst:stx-first effect-form) "expected effect operation symbol")))
+          (setf effect-name (stx:syntax-e (stx-cst:stx-first effect-form)))
           ;; Parse the argument if present
-          (when (cst:consp (cst:rest effect-form))
-            (setf effect-arg (parse-expression (cst:second effect-form) source))
+          (when (stx-cst:stx-consp (stx-cst:stx-rest effect-form))
+            (setf effect-arg (parse-expression (stx-cst:stx-second effect-form) source))
             ;; Check for extra arguments
-            (when (cst:consp (cst:rest (cst:rest effect-form)))
+            (when (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest effect-form)))
               (parse-error "Malformed perform expression"
-                           (note source (cst:first (cst:rest (cst:rest effect-form)))
+                           (note source (stx-cst:stx-first (stx-cst:stx-rest (stx-cst:stx-rest effect-form)))
                                  "unexpected extra argument")))))
 
          (t
@@ -974,9 +975,9 @@ BODY: Expression to evaluate with the captured continuation"
                        (note source effect-form "expected effect operation"))))
 
        ;; Check for trailing forms after the effect
-       (when (cst:consp (cst:rest (cst:rest form)))
+       (when (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest form)))
          (parse-error "Malformed perform expression"
-                      (note source (cst:first (cst:rest (cst:rest form)))
+                      (note source (stx-cst:stx-first (stx-cst:stx-rest (stx-cst:stx-rest form)))
                             "unexpected trailing form")))
 
        (make-node-perform
@@ -984,27 +985,27 @@ BODY: Expression to evaluate with the captured continuation"
         :arg effect-arg
         :location (form-location source form))))
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:handle (cst:raw (cst:first form))))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:handle (stx:syntax-e (stx-cst:stx-first form))))
 
      ;; (handle)
-     (unless (cst:consp (cst:rest form))
+     (unless (stx-cst:stx-consp (stx-cst:stx-rest form))
        (parse-error "Malformed handle expression"
-                    (note-end source (cst:first form) "expected expression")))
+                    (note-end source (stx-cst:stx-first form) "expected expression")))
 
      ;; (handle expr)
-     (unless (cst:consp (cst:rest (cst:rest form)))
+     (unless (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest form)))
        (parse-error "Malformed handle expression"
-                    (note-end source (cst:second form) "expected effect handlers")))
+                    (note-end source (stx-cst:stx-second form) "expected effect handlers")))
 
-     (let ((expr (parse-expression (cst:second form) source))
+     (let ((expr (parse-expression (stx-cst:stx-second form) source))
            (branches nil)
            (return-handler nil))
 
        ;; Parse handler branches
-       (loop :for rest := (cst:nthrest 2 form) :then (cst:rest rest)
-             :while (cst:consp rest)
-             :for branch-form := (cst:first rest)
+       (loop :for rest := (stx-cst:stx-nthrest 2 form) :then (stx-cst:stx-rest rest)
+             :while (stx-cst:stx-consp rest)
+             :for branch-form := (stx-cst:stx-first rest)
              :do (multiple-value-bind (branch is-return)
                      (parse-handle-branch branch-form source)
                    (if is-return
@@ -1024,94 +1025,94 @@ BODY: Expression to evaluate with the captured continuation"
     ;; Delimited Continuations: reset, shift, call/cc
     ;;
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:cont/reset (cst:raw (cst:first form))))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:cont/reset (stx:syntax-e (stx-cst:stx-first form))))
 
      ;; (reset)
-     (unless (cst:consp (cst:rest form))
+     (unless (stx-cst:stx-consp (stx-cst:stx-rest form))
        (parse-error "Malformed reset expression"
-                    (note-end source (cst:first form) "expected body")))
+                    (note-end source (stx-cst:stx-first form) "expected body")))
 
      (make-node-reset
-      :body (parse-body (cst:rest form) (cst:first form) source)
+      :body (parse-body (stx-cst:stx-rest form) (stx-cst:stx-first form) source)
       :location (form-location source form)))
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:cont/shift (cst:raw (cst:first form))))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:cont/shift (stx:syntax-e (stx-cst:stx-first form))))
 
      ;; (shift)
-     (unless (cst:consp (cst:rest form))
+     (unless (stx-cst:stx-consp (stx-cst:stx-rest form))
        (parse-error "Malformed shift expression"
-                    (note-end source (cst:first form) "expected continuation variable")))
+                    (note-end source (stx-cst:stx-first form) "expected continuation variable")))
 
      ;; (shift k)
-     (unless (cst:consp (cst:rest (cst:rest form)))
+     (unless (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest form)))
        (parse-error "Malformed shift expression"
-                    (note-end source (cst:second form) "expected body")))
+                    (note-end source (stx-cst:stx-second form) "expected body")))
 
      ;; Validate continuation variable
-     (unless (and (cst:atom (cst:second form))
-                  (symbolp (cst:raw (cst:second form))))
+     (unless (and (stx-cst:stx-atom-p (stx-cst:stx-second form))
+                  (symbolp (stx:syntax-e (stx-cst:stx-second form))))
        (parse-error "Malformed shift expression"
-                    (note source (cst:second form) "expected continuation variable name")))
+                    (note source (stx-cst:stx-second form) "expected continuation variable name")))
 
      (make-node-shift
-      :cont-var (parse-variable (cst:second form) source)
-      :body (parse-body (cst:nthrest 2 form) (cst:second form) source)
+      :cont-var (parse-variable (stx-cst:stx-second form) source)
+      :body (parse-body (stx-cst:stx-nthrest 2 form) (stx-cst:stx-second form) source)
       :location (form-location source form)))
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:call/cc (cst:raw (cst:first form))))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:call/cc (stx:syntax-e (stx-cst:stx-first form))))
 
      ;; (call/cc)
-     (unless (cst:consp (cst:rest form))
+     (unless (stx-cst:stx-consp (stx-cst:stx-rest form))
        (parse-error "Malformed call/cc expression"
-                    (note-end source (cst:first form) "expected continuation variable")))
+                    (note-end source (stx-cst:stx-first form) "expected continuation variable")))
 
      ;; (call/cc k)
-     (unless (cst:consp (cst:rest (cst:rest form)))
+     (unless (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest form)))
        (parse-error "Malformed call/cc expression"
-                    (note-end source (cst:second form) "expected body")))
+                    (note-end source (stx-cst:stx-second form) "expected body")))
 
      ;; Validate continuation variable
-     (unless (and (cst:atom (cst:second form))
-                  (symbolp (cst:raw (cst:second form))))
+     (unless (and (stx-cst:stx-atom-p (stx-cst:stx-second form))
+                  (symbolp (stx:syntax-e (stx-cst:stx-second form))))
        (parse-error "Malformed call/cc expression"
-                    (note source (cst:second form) "expected continuation variable name")))
+                    (note source (stx-cst:stx-second form) "expected continuation variable name")))
 
      (make-node-call/cc
-      :cont-var (parse-variable (cst:second form) source)
-      :body (parse-body (cst:nthrest 2 form) (cst:second form) source)
+      :cont-var (parse-variable (stx-cst:stx-second form) source)
+      :body (parse-body (stx-cst:stx-nthrest 2 form) (stx-cst:stx-second form) source)
       :location (form-location source form)))
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:let (cst:raw (cst:first form))))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:let (stx:syntax-e (stx-cst:stx-first form))))
 
      ;; (let)
-     (unless (cst:consp (cst:rest form))
+     (unless (stx-cst:stx-consp (stx-cst:stx-rest form))
        (parse-error "Malformed let"
-                    (note-end source (cst:first form) "expected let binding list")))
+                    (note-end source (stx-cst:stx-first form) "expected let binding list")))
 
      ;; (let (...))
-     (unless (cst:consp (cst:rest (cst:rest form)))
+     (unless (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest form)))
        (parse-error "Malformed let"
-                    (note-end source (cst:second form) "expected let body")))
+                    (note-end source (stx-cst:stx-second form) "expected let body")))
 
-     (unless (cst:proper-list-p (cst:second form))
+     (unless (stx-cst:stx-proper-list-p (stx-cst:stx-second form))
        (parse-error "Malformed let"
-                    (note source (cst:second form) "expected binding list")))
+                    (note source (stx-cst:stx-second form) "expected binding list")))
 
      (let* (declares
-            
-            (bindings (loop :for bindings := (cst:second form) :then (cst:rest bindings)
-                            :while (cst:consp bindings)
-                            :for binding := (cst:first bindings)
+
+            (bindings (loop :for bindings := (stx-cst:stx-second form) :then (stx-cst:stx-rest bindings)
+                            :while (stx-cst:stx-consp bindings)
+                            :for binding := (stx-cst:stx-first bindings)
                             ;; if binding is in the form (declare x y+)
-                            :if (and (cst:consp binding)
-                                     (cst:consp (cst:rest form))
-                                     (cst:consp (cst:rest (cst:rest form)))
-                                     (cst:atom (cst:first binding))
-                                     (eq (cst:raw (cst:first binding)) 'coalton:declare))
+                            :if (and (stx-cst:stx-consp binding)
+                                     (stx-cst:stx-consp (stx-cst:stx-rest form))
+                                     (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest form)))
+                                     (stx-cst:stx-atom-p (stx-cst:stx-first binding))
+                                     (eq (stx:syntax-e (stx-cst:stx-first binding)) 'coalton:declare))
                               :do (push (parse-let-declare binding source) declares)
                             :else
                               :collect (parse-let-binding binding source))))
@@ -1119,79 +1120,79 @@ BODY: Expression to evaluate with the captured continuation"
        (make-node-let
         :bindings bindings
         :declares (nreverse declares)
-        :body (parse-body (cst:nthrest 2 form) form source)
+        :body (parse-body (stx-cst:stx-nthrest 2 form) form source)
         :location (form-location source form))))
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:rec (cst:raw (cst:first form))))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:rec (stx:syntax-e (stx-cst:stx-first form))))
 
      (multiple-value-bind (name type rec-bindings body)
          (cond
            ;; (rec)
-           ((not (cst:consp (cst:rest form)))
+           ((not (stx-cst:stx-consp (stx-cst:stx-rest form)))
             (parse-error "Malformed rec"
-                         (note-end source (cst:first form)
+                         (note-end source (stx-cst:stx-first form)
                                    "expected function name")))
            ;; (rec name)
-           ((not (cst:consp (cst:nthrest 2 form)))
+           ((not (stx-cst:stx-consp (stx-cst:stx-nthrest 2 form)))
             (parse-error "Malformed rec"
-                         (note-end source (cst:second form)
+                         (note-end source (stx-cst:stx-second form)
                                    "expected binding list")))
            ;; (rec name bindings)
-           ((cst:null (cst:nthrest 3 form))
+           ((stx-cst:stx-null-p (stx-cst:stx-nthrest 3 form))
             (parse-error "Malformed rec"
-                         (note-end source (cst:third form)
+                         (note-end source (stx-cst:stx-third form)
                                    "expected rec body")))
-           ((cst:null (cst:second form))
+           ((stx-cst:stx-null-p (stx-cst:stx-second form))
             (parse-error "Malformed rec"
-                         (note source (cst:second form)
+                         (note source (stx-cst:stx-second form)
                                "unexpected empty list")))
            ;; (rec name bindings ...)
-           ((cst:atom (cst:second form))
-            (values (cst:second form)
+           ((stx-cst:stx-atom-p (stx-cst:stx-second form))
+            (values (stx-cst:stx-second form)
                     nil
-                    (cst:third form)
-                    (cst:nthrest 3 form)))
+                    (stx-cst:stx-third form)
+                    (stx-cst:stx-nthrest 3 form)))
            ;; (rec (name qual-ty) bindings ...)
            (t
             (cond
-              ((cst:null (cst:rest (cst:second form)))
-               (values (cst:first (cst:second form))
+              ((stx-cst:stx-null-p (stx-cst:stx-rest (stx-cst:stx-second form)))
+               (values (stx-cst:stx-first (stx-cst:stx-second form))
                        nil
-                       (cst:third form)
-                       (cst:nthrest 3 form)))
-              ((cst:consp (cst:rest (cst:second form)))
-               (when (cst:consp (cst:nthrest 2 (cst:second form)))
+                       (stx-cst:stx-third form)
+                       (stx-cst:stx-nthrest 3 form)))
+              ((stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-second form)))
+               (when (stx-cst:stx-consp (stx-cst:stx-nthrest 2 (stx-cst:stx-second form)))
                  (parse-error "Malformed rec"
-                              (note-end source (cst:second (cst:second form))
+                              (note-end source (stx-cst:stx-second (stx-cst:stx-second form))
                                         "unexpected trailing form(s)")))
-               (values (cst:first (cst:second form))
-                       (cst:second (cst:second form))
-                       (cst:third form)
-                       (cst:nthrest 3 form)))
+               (values (stx-cst:stx-first (stx-cst:stx-second form))
+                       (stx-cst:stx-second (stx-cst:stx-second form))
+                       (stx-cst:stx-third form)
+                       (stx-cst:stx-nthrest 3 form)))
               (t
                (parse-error "Malformed rec"
-                            (note source (cst:rest (cst:second form))
+                            (note source (stx-cst:stx-rest (stx-cst:stx-second form))
                                   "unexpected dotted list"))))))
 
-       (unless (cst:proper-list-p rec-bindings)
+       (unless (stx-cst:stx-proper-list-p rec-bindings)
          (parse-error "Malformed rec"
                       (note source rec-bindings
                             "expected binding list")))
 
        (multiple-value-bind (declares bindings vars)
-           (loop :for bindings := rec-bindings :then (cst:rest bindings)
-                 :while (cst:consp bindings)
-                 :for binding := (cst:first bindings)
+           (loop :for bindings := rec-bindings :then (stx-cst:stx-rest bindings)
+                 :while (stx-cst:stx-consp bindings)
+                 :for binding := (stx-cst:stx-first bindings)
                  ;; if binding is in the form (declare x y+)
-                 :if (and (cst:consp binding)
-                          (cst:atom (cst:first binding))
-                          (eq (cst:raw (cst:first binding)) 'coalton:declare))
+                 :if (and (stx-cst:stx-consp binding)
+                          (stx-cst:stx-atom-p (stx-cst:stx-first binding))
+                          (eq (stx:syntax-e (stx-cst:stx-first binding)) 'coalton:declare))
                    :collect (parse-let-declare binding source)
                      :into declares
                  :else
                    :collect (parse-rec-binding binding source) :into binding-list
-                   :and :collect (cst:first binding) :into vars
+                   :and :collect (stx-cst:stx-first binding) :into vars
                  :finally
                     (return (values declares binding-list vars)))
 
@@ -1240,188 +1241,188 @@ BODY: Expression to evaluate with the captured continuation"
             :location (form-location source form)))
           :location (form-location source form)))))
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:lisp (cst:raw (cst:first form))))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:lisp (stx:syntax-e (stx-cst:stx-first form))))
      ;; (lisp)
-     (unless (cst:consp (cst:rest form))
+     (unless (stx-cst:stx-consp (stx-cst:stx-rest form))
        (parse-error "Malformed lisp expression"
-                    (note-end source (cst:first form) "expected expression type")))
+                    (note-end source (stx-cst:stx-first form) "expected expression type")))
 
      ;; (lisp T)
-     (unless (cst:consp (cst:rest (cst:rest form)))
+     (unless (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest form)))
        (parse-error "Malformed lisp expression"
-                    (note-end source (cst:second form) "expected binding list")))
+                    (note-end source (stx-cst:stx-second form) "expected binding list")))
 
      ;; (lisp T (...))
-     (unless (cst:consp (cst:rest (cst:rest (cst:rest form))))
+     (unless (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest (stx-cst:stx-rest form))))
        (parse-error "Malformed lisp expression"
                     (note source form "expected body")))
 
-     (let ((vars (loop :for vars := (cst:third form) :then (cst:rest vars)
-                       :while (cst:consp vars)
-                       :collect (parse-variable (cst:first vars) source))))
+     (let ((vars (loop :for vars := (stx-cst:stx-third form) :then (stx-cst:stx-rest vars)
+                       :while (stx-cst:stx-consp vars)
+                       :collect (parse-variable (stx-cst:stx-first vars) source))))
        (make-node-lisp
-        :type (parse-type (cst:second form) source)
+        :type (parse-type (stx-cst:stx-second form) source)
         :vars vars
         :var-names (mapcar #'node-variable-name vars)
-        :body (cst:raw (cst:nthrest 3 form))
+        :body (mapcar #'stx:syntax->datum (stx:syntax-e (stx-cst:stx-nthrest 3 form)))
         :location (form-location source form))))
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:match (cst:raw (cst:first form))))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:match (stx:syntax-e (stx-cst:stx-first form))))
 
      ;; (match)
-     (unless (cst:consp (cst:rest form))
+     (unless (stx-cst:stx-consp (stx-cst:stx-rest form))
        (parse-error "Malformed match expression"
-                    (note-end source (cst:first form) "expected expression")))
+                    (note-end source (stx-cst:stx-first form) "expected expression")))
 
      (make-node-match
-      :expr (parse-expression (cst:second form) source)
-      :branches (loop :for branches := (cst:nthrest 2 form) :then (cst:rest branches)
-                      :while (cst:consp branches)
-                      :collect (parse-match-branch (cst:first branches) source))
+      :expr (parse-expression (stx-cst:stx-second form) source)
+      :branches (loop :for branches := (stx-cst:stx-nthrest 2 form) :then (stx-cst:stx-rest branches)
+                      :while (stx-cst:stx-consp branches)
+                      :collect (parse-match-branch (stx-cst:stx-first branches) source))
       :location (form-location source form)))
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:progn (cst:raw (cst:first form))))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:progn (stx:syntax-e (stx-cst:stx-first form))))
      (make-node-progn
-      :body (parse-body (cst:rest form) (cst:first form) source)
+      :body (parse-body (stx-cst:stx-rest form) (stx-cst:stx-first form) source)
       :location (form-location source form)))
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:the (cst:raw (cst:first form))))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:the (stx:syntax-e (stx-cst:stx-first form))))
      ;; (the)
-     (unless (cst:consp (cst:rest form))
+     (unless (stx-cst:stx-consp (stx-cst:stx-rest form))
        (parse-error "Malformed the expression"
-                    (note-end source (cst:first form) "expected type")))
+                    (note-end source (stx-cst:stx-first form) "expected type")))
 
      ;; (the T)
-     (unless (cst:consp (cst:rest (cst:rest form)))
+     (unless (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest form)))
        (parse-error "Malformed the expression"
-                    (note-end source (cst:second form) "expected value")))
+                    (note-end source (stx-cst:stx-second form) "expected value")))
 
      ;; (the a b c)
-     (when (cst:consp (cst:rest (cst:rest (cst:rest form))))
+     (when (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest (stx-cst:stx-rest form))))
        (parse-error "Malformed the expression"
-                    (note source (cst:first (cst:rest (cst:rest (cst:rest form))))
+                    (note source (stx-cst:stx-first (stx-cst:stx-rest (stx-cst:stx-rest (stx-cst:stx-rest form))))
                           "unexpected trailing form")))
 
      (make-node-the
-      :type (parse-type (cst:second form) source)
-      :expr (parse-expression (cst:third form) source)
+      :type (parse-type (stx-cst:stx-second form) source)
+      :expr (parse-expression (stx-cst:stx-third form) source)
       :location (form-location source form)))
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:return (cst:raw (cst:first form))))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:return (stx:syntax-e (stx-cst:stx-first form))))
      (let (expr)
 
        ;; (return ...)
-       (when (cst:consp (cst:rest form))
+       (when (stx-cst:stx-consp (stx-cst:stx-rest form))
          ;; (return a b ...)
-         (when (cst:consp (cst:rest (cst:rest form)))
+         (when (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest form)))
            (parse-error "Malformed return expression"
-                        (note source (cst:first (cst:rest (cst:rest form)))
+                        (note source (stx-cst:stx-first (stx-cst:stx-rest (stx-cst:stx-rest form)))
                               "unexpected trailing form")))
 
-         (setf expr (parse-expression (cst:second form) source)))
+         (setf expr (parse-expression (stx-cst:stx-second form) source)))
 
        (make-node-return
         :expr expr
         :location (form-location source form))))
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:or (cst:raw (cst:first form))))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:or (stx:syntax-e (stx-cst:stx-first form))))
      (make-node-or
-      :nodes (loop :for args := (cst:rest form) :then (cst:rest args)
-                   :while (cst:consp args)
-                   :for arg := (cst:first args)
+      :nodes (loop :for args := (stx-cst:stx-rest form) :then (stx-cst:stx-rest args)
+                   :while (stx-cst:stx-consp args)
+                   :for arg := (stx-cst:stx-first args)
                    :collect (parse-expression arg source))
       :location (form-location source form)))
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:and (cst:raw (cst:first form))))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:and (stx:syntax-e (stx-cst:stx-first form))))
 
      (make-node-and
-      :nodes (loop :for args := (cst:rest form) :then (cst:rest args)
-                   :while (cst:consp args)
-                   :for arg := (cst:first args)
+      :nodes (loop :for args := (stx-cst:stx-rest form) :then (stx-cst:stx-rest args)
+                   :while (stx-cst:stx-consp args)
+                   :for arg := (stx-cst:stx-first args)
                    :collect (parse-expression arg source))
       :location (form-location source form)))
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:if (cst:raw (cst:first form))))
-     (unless (cst:consp (cst:rest form))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:if (stx:syntax-e (stx-cst:stx-first form))))
+     (unless (stx-cst:stx-consp (stx-cst:stx-rest form))
        (parse-error "Malformed if expression"
-                    (note-end source (cst:first form) "expected a predicate")))
+                    (note-end source (stx-cst:stx-first form) "expected a predicate")))
 
-     (unless (cst:consp (cst:rest (cst:rest form)))
+     (unless (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest form)))
        (parse-error "Malformed if expression"
-                    (note-end source (cst:second form) "expected a form")))
+                    (note-end source (stx-cst:stx-second form) "expected a form")))
 
-     (unless (cst:consp (cst:rest (cst:rest (cst:rest form))))
+     (unless (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest (stx-cst:stx-rest form))))
        (parse-error "Malformed if expression"
-                    (note-end source (cst:third form) "expected a form")))
+                    (note-end source (stx-cst:stx-third form) "expected a form")))
 
-     (when (cst:consp (cst:rest (cst:rest (cst:rest (cst:rest form)))))
+     (when (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest (stx-cst:stx-rest (stx-cst:stx-rest form)))))
        (parse-error "Malformed if expression"
-                    (note source (cst:first (cst:rest (cst:rest (cst:rest (cst:rest form)))))
+                    (note source (stx-cst:stx-first (stx-cst:stx-rest (stx-cst:stx-rest (stx-cst:stx-rest (stx-cst:stx-rest form)))))
                           "unexpected trailing form")))
 
      (make-node-if
-      :expr (parse-expression (cst:second form) source)
-      :then (parse-expression (cst:third form) source)
-      :else (parse-expression (cst:fourth form) source)
+      :expr (parse-expression (stx-cst:stx-second form) source)
+      :then (parse-expression (stx-cst:stx-third form) source)
+      :else (parse-expression (stx-cst:stx-nth 3 form) source)
       :location (form-location source form)))
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:when (cst:raw (cst:first form))))
-     (unless (cst:consp (cst:rest form))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:when (stx:syntax-e (stx-cst:stx-first form))))
+     (unless (stx-cst:stx-consp (stx-cst:stx-rest form))
        (parse-error "Malformed when expression"
-                    (note-end source (cst:first form) "expected a predicate")))
+                    (note-end source (stx-cst:stx-first form) "expected a predicate")))
 
      (make-node-when
-      :expr (parse-expression (cst:second form) source)
-      :body (parse-body (cst:rest (cst:rest form)) (cst:second form) source)
+      :expr (parse-expression (stx-cst:stx-second form) source)
+      :body (parse-body (stx-cst:stx-rest (stx-cst:stx-rest form)) (stx-cst:stx-second form) source)
       :location (form-location source form)))
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:unless (cst:raw (cst:first form))))
-     (unless (cst:consp (cst:rest form))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:unless (stx:syntax-e (stx-cst:stx-first form))))
+     (unless (stx-cst:stx-consp (stx-cst:stx-rest form))
        (parse-error "Malformed unless expression"
-                    (note-end source (cst:first form) "expected a predicate")))
+                    (note-end source (stx-cst:stx-first form) "expected a predicate")))
 
      (make-node-unless
-      :expr (parse-expression (cst:second form) source)
-      :body (parse-body (cst:rest (cst:rest form)) (cst:second form) source)
+      :expr (parse-expression (stx-cst:stx-second form) source)
+      :body (parse-body (stx-cst:stx-rest (stx-cst:stx-rest form)) (stx-cst:stx-second form) source)
       :location (form-location source form)))
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:cond (cst:raw (cst:first form))))
-     (unless (cst:consp (cst:rest form))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:cond (stx:syntax-e (stx-cst:stx-first form))))
+     (unless (stx-cst:stx-consp (stx-cst:stx-rest form))
        (parse-error "Malformed cond expression"
-                    (note-end source (cst:first form) "expected one or more clauses")))
+                    (note-end source (stx-cst:stx-first form) "expected one or more clauses")))
 
      (make-node-cond
-      :clauses (loop :for clauses := (cst:rest form) :then (cst:rest clauses)
-                     :while (cst:consp clauses)
-                     :for clause := (cst:first clauses)
+      :clauses (loop :for clauses := (stx-cst:stx-rest form) :then (stx-cst:stx-rest clauses)
+                     :while (stx-cst:stx-consp clauses)
+                     :for clause := (stx-cst:stx-first clauses)
                      :collect (parse-cond-clause clause source))
       :location (form-location source form)))
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:do (cst:raw (cst:first form))))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:do (stx:syntax-e (stx-cst:stx-first form))))
      (parse-do form source))
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:while (cst:raw (cst:first form))))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:while (stx:syntax-e (stx-cst:stx-first form))))
      (multiple-value-bind (label labelled-body label-cst) (take-label form)
        ;; (while [label])
-       (unless (cst:consp labelled-body)
+       (unless (stx-cst:stx-consp labelled-body)
          (parse-error "Malformed while expression"
-                      (note-end source (or label-cst (cst:first form)) "expected condition")))
+                      (note-end source (or label-cst (stx-cst:stx-first form)) "expected condition")))
        ;; (while [label] condition)
-       (unless (cst:consp (cst:rest labelled-body))
+       (unless (stx-cst:stx-consp (stx-cst:stx-rest labelled-body))
          (parse-error "Malformed while expression"
-                      (note-end source (cst:first labelled-body) "expected body")))
+                      (note-end source (stx-cst:stx-first labelled-body) "expected body")))
        (let ((*loop-label-context*
                (if label
                    (list* label const:+default-loop-label+ *loop-label-context*)
@@ -1430,35 +1431,35 @@ BODY: Expression to evaluate with the captured continuation"
          (make-node-while
           :location (form-location source form)
           :label (or label const:+default-loop-label+)
-          :expr (parse-expression (cst:first labelled-body) source)
-          :body (parse-body (cst:rest labelled-body) form source)))))
+          :expr (parse-expression (stx-cst:stx-first labelled-body) source)
+          :body (parse-body (stx-cst:stx-rest labelled-body) form source)))))
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:while-let (cst:raw (cst:first form))))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:while-let (stx:syntax-e (stx-cst:stx-first form))))
 
      (multiple-value-bind (label labelled-body label-cst) (take-label form)
        ;; (while-let [label])
-       (unless (cst:consp labelled-body)
+       (unless (stx-cst:stx-consp labelled-body)
          (parse-error "Malformed while-let expression"
-                      (note-end source (or label-cst (cst:first form)) "expected pattern")))
+                      (note-end source (or label-cst (stx-cst:stx-first form)) "expected pattern")))
 
        ;; (while-let [label] pattern)
-       (unless (and (cst:consp (cst:rest labelled-body))
-                    (eq 'coalton:= (cst:raw (cst:second labelled-body))))
+       (unless (and (stx-cst:stx-consp (stx-cst:stx-rest labelled-body))
+                    (eq 'coalton:= (stx:syntax-e (stx-cst:stx-second labelled-body))))
          (parse-error "Malformed while-let expression"
-                      (if (cst:consp (cst:rest labelled-body))
-                          (note source (cst:second labelled-body) "expected =")
-                          (note-end source (cst:first labelled-body) "expected ="))))
+                      (if (stx-cst:stx-consp (stx-cst:stx-rest labelled-body))
+                          (note source (stx-cst:stx-second labelled-body) "expected =")
+                          (note-end source (stx-cst:stx-first labelled-body) "expected ="))))
 
        ;; (when-let [label] pattern =)
-       (unless (cst:consp (cst:nthrest 2 labelled-body))
+       (unless (stx-cst:stx-consp (stx-cst:stx-nthrest 2 labelled-body))
          (parse-error "Malformed while-let expression"
-                      (note-end source (cst:second labelled-body) "expected expression")))
+                      (note-end source (stx-cst:stx-second labelled-body) "expected expression")))
 
        ;; (when-let pattern = expr)
-       (unless (cst:consp (cst:nthrest 3 labelled-body))
+       (unless (stx-cst:stx-consp (stx-cst:stx-nthrest 3 labelled-body))
          (parse-error "Malformed while-let expression"
-                      (note-end source (cst:third labelled-body) "expected body")))
+                      (note-end source (stx-cst:stx-third labelled-body) "expected body")))
        (let* ((*loop-label-context*
                 (if label
                     (list* label const:+default-loop-label+ *loop-label-context*)
@@ -1466,16 +1467,16 @@ BODY: Expression to evaluate with the captured continuation"
          (make-node-while-let
           :location (form-location source form)
           :label (or label const:+default-loop-label+)
-          :pattern (parse-pattern (cst:first labelled-body) source)
-          :expr (parse-expression (cst:third labelled-body) source)
-          :body (parse-body (cst:nthrest 3 labelled-body) form source)))))
+          :pattern (parse-pattern (stx-cst:stx-first labelled-body) source)
+          :expr (parse-expression (stx-cst:stx-third labelled-body) source)
+          :body (parse-body (stx-cst:stx-nthrest 3 labelled-body) form source)))))
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:loop (cst:raw (cst:first form))))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:loop (stx:syntax-e (stx-cst:stx-first form))))
      (multiple-value-bind (label labelled-body label-cst) (take-label form)
-       (unless (cst:consp labelled-body)
+       (unless (stx-cst:stx-consp labelled-body)
          (parse-error "Malformed loop expression"
-                      (note-end source (or label-cst (cst:first form)) "expected a loop body")))
+                      (note-end source (or label-cst (stx-cst:stx-first form)) "expected a loop body")))
 
        (let* ((*loop-label-context*
                 (if label
@@ -1486,11 +1487,11 @@ BODY: Expression to evaluate with the captured continuation"
           :label (or label const:+default-loop-label+)
           :body (parse-body labelled-body form source)))))
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:break (cst:raw (cst:first form))))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:break (stx:syntax-e (stx-cst:stx-first form))))
 
      (multiple-value-bind (label postlabel) (take-label form)
-       (unless (cst:null postlabel)
+       (unless (stx-cst:stx-null-p postlabel)
          (parse-error "Invalid argument in break"
                       (note-end source form
                                 (if label
@@ -1500,7 +1501,7 @@ BODY: Expression to evaluate with the captured continuation"
        (if label
            (unless (member label *loop-label-context*)
              (parse-error "Invalid label in break"
-                          (note source (cst:second form)
+                          (note source (stx-cst:stx-second form)
                                 "label not found in any enclosing loop")))
            (unless *loop-label-context*
              (parse-error "Invalid break"
@@ -1510,11 +1511,11 @@ BODY: Expression to evaluate with the captured continuation"
        (make-node-break :location (form-location source form)
                         :label (or label (car *loop-label-context*)))))
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:continue (cst:raw (cst:first form))))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:continue (stx:syntax-e (stx-cst:stx-first form))))
 
      (multiple-value-bind (label postlabel) (take-label form)
-       (unless (cst:null postlabel)
+       (unless (stx-cst:stx-null-p postlabel)
          (parse-error "Invalid argument in continue"
                       (note source form
                             (if label
@@ -1524,7 +1525,7 @@ BODY: Expression to evaluate with the captured continuation"
        (if label
            (unless (member label *loop-label-context*)
              (parse-error "Invalid label in continue"
-                          (note source (cst:second form)
+                          (note source (stx-cst:stx-second form)
                                 "label not found in any enclosing loop")))
            (unless *loop-label-context*
              (parse-error "Invalid continue"
@@ -1535,34 +1536,34 @@ BODY: Expression to evaluate with the captured continuation"
                            :label (or label (car *loop-label-context*)))))
 
 
-    ((and (cst:atom (cst:first form))
-          (eq 'coalton:for (cst:raw (cst:first form))))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:for (stx:syntax-e (stx-cst:stx-first form))))
 
      (multiple-value-bind (label labelled-body label-cst) (take-label form)
        ;; (for [label])
-       (unless (cst:consp labelled-body)
+       (unless (stx-cst:stx-consp labelled-body)
          (parse-error "Malformed for expression"
-                      (note-end source (or label-cst (cst:first form)) "expected pattern")))
+                      (note-end source (or label-cst (stx-cst:stx-first form)) "expected pattern")))
 
        ;; (for [label] pattern)
-       (unless (and (cst:consp (cst:rest labelled-body))
-                    (cst:atom (cst:second labelled-body))
-                    (eq 'coalton:in (cst:raw (cst:second labelled-body))))
+       (unless (and (stx-cst:stx-consp (stx-cst:stx-rest labelled-body))
+                    (stx-cst:stx-atom-p (stx-cst:stx-second labelled-body))
+                    (eq 'coalton:in (stx:syntax-e (stx-cst:stx-second labelled-body))))
          (parse-error "Malformed for expression"
-                      (if (and (cst:consp (cst:rest labelled-body))
-                               (cst:second labelled-body))
-                          (note source (cst:second labelled-body) "expected in")
-                          (note-end source (cst:first labelled-body) "expected in"))))
+                      (if (and (stx-cst:stx-consp (stx-cst:stx-rest labelled-body))
+                               (stx-cst:stx-second labelled-body))
+                          (note source (stx-cst:stx-second labelled-body) "expected in")
+                          (note-end source (stx-cst:stx-first labelled-body) "expected in"))))
 
        ;; (for [label] pattern in)
-       (unless (cst:consp (cst:nthrest 2 labelled-body))
+       (unless (stx-cst:stx-consp (stx-cst:stx-nthrest 2 labelled-body))
          (parse-error "Malformed for expression"
                       (note-end source form "expected expression")))
 
        ;; (for [label] pattern in expr)
-       (unless (cst:consp (cst:nthrest 3 labelled-body))
+       (unless (stx-cst:stx-consp (stx-cst:stx-nthrest 3 labelled-body))
          (parse-error "Malformed for expression"
-                      (note-end source (cst:third labelled-body) "expected body")))
+                      (note-end source (stx-cst:stx-third labelled-body) "expected body")))
 
        (let ((*loop-label-context*
                (if label
@@ -1571,17 +1572,17 @@ BODY: Expression to evaluate with the captured continuation"
          (make-node-for
           :location (form-location source form)
           :label (or label const:+default-loop-label+)
-          :pattern (parse-pattern (cst:first labelled-body) source)
-          :expr (parse-expression (cst:third labelled-body) source)
-          :body (parse-body (cst:nthrest 3 labelled-body) form  source)))))
+          :pattern (parse-pattern (stx-cst:stx-first labelled-body) source)
+          :expr (parse-expression (stx-cst:stx-third labelled-body) source)
+          :body (parse-body (stx-cst:stx-nthrest 3 labelled-body) form  source)))))
 
     ;;
     ;; Macros
     ;;
 
-    ((and (cst:atom (cst:first form))
-          (symbolp (cst:raw (cst:first form)))
-          (macro-function (cst:raw (cst:first form))))
+    ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (symbolp (stx:syntax-e (stx-cst:stx-first form)))
+          (macro-function (stx:syntax-e (stx-cst:stx-first form))))
 
      (let ((*macro-expansion-count* (+ 1 *macro-expansion-count*)))
 
@@ -1603,10 +1604,10 @@ BODY: Expression to evaluate with the captured continuation"
 
     (t
      (make-node-application
-      :rator (parse-expression (cst:first form) source)
-      :rands (loop :for rands := (cst:rest form) :then (cst:rest rands)
-                   :while (cst:consp rands)
-                   :for rand := (cst:first rands)
+      :rator (parse-expression (stx-cst:stx-first form) source)
+      :rands (loop :for rands := (stx-cst:stx-rest form) :then (stx-cst:stx-rest rands)
+                   :while (stx-cst:stx-consp rands)
+                   :for rand := (stx-cst:stx-first rands)
                    :collect (parse-expression rand source))
       :location (form-location source form)))))
 
@@ -1620,57 +1621,57 @@ BODY: Expression to evaluate with the captured continuation"
             :last-node (first (last nodes)))
      :location (source:make-location
                 source
-                (cons (source:span-start (cst:source (first forms)))
-                      (source:span-end (cst:source (first (last forms)))))))))
+                (cons (source:span-start (stx-cst:stx-source (first forms)))
+                      (source:span-end (stx-cst:stx-source (first (last forms)))))))))
 
 (defun parse-variable (form source)
-  (declare (type cst:cst form)
+  (declare (type stx:syntax-object form)
            (values node-variable &optional))
 
-  (unless (and (cst:atom form)
-               (identifierp (cst:raw form)))
+  (unless (and (stx-cst:stx-atom-p form)
+               (identifierp (stx:syntax-e form)))
     (parse-error "Invalid variable"
                  (note source form "expected identifier")))
 
-  (when (string= "_" (symbol-name (cst:raw form)))
+  (when (string= "_" (symbol-name (stx:syntax-e form)))
     (parse-error "Invalid variable"
                  (note source form "invalid variable name '_'")))
 
-  (when (char= #\. (aref (symbol-name (cst:raw form)) 0))
+  (when (char= #\. (aref (symbol-name (stx:syntax-e form)) 0))
     (parse-error "Invalid variable"
                  (note source form "variables cannot start with '.'")))
 
   (make-node-variable
-   :name (cst:raw form)
+   :name (stx:syntax-e form)
    :location (form-location source form)))
 
 (defun parse-accessor (form source)
-  (declare (type cst:cst form)
+  (declare (type stx:syntax-object form)
            (values node-accessor))
 
-  (assert (cst:atom form))
-  (assert (symbolp (cst:raw form)))
-  (assert (char= #\. (aref (symbol-name (cst:raw form)) 0)))
+  (assert (stx-cst:stx-atom-p form))
+  (assert (symbolp (stx:syntax-e form)))
+  (assert (char= #\. (aref (symbol-name (stx:syntax-e form)) 0)))
 
   (make-node-accessor
-   :name (subseq (symbol-name (cst:raw form)) 1)
+   :name (subseq (symbol-name (stx:syntax-e form)) 1)
    :location (form-location source form)))
 
 (defun parse-literal (form source)
-  (declare (type cst:cst form)
+  (declare (type stx:syntax-object form)
            (values node &optional))
 
-  (assert (cst:atom form))
+  (assert (stx-cst:stx-atom-p form))
 
-  (typecase (cst:raw form)
+  (typecase (stx:syntax-e form)
     (integer
      (make-node-integer-literal
-      :value (cst:raw form)
+      :value (stx:syntax-e form)
       :location (form-location source form)))
 
     (util:literal-value
      (make-node-literal
-      :value (cst:raw form)
+      :value (stx:syntax-e form)
       :location (form-location source form)))
 
     (t
@@ -1678,84 +1679,84 @@ BODY: Expression to evaluate with the captured continuation"
                   (note source form "unknown literal type")))))
 
 (defun parse-body (form preceding-form source)
-  (declare (type cst:cst form)
+  (declare (type stx:syntax-object form)
            (values node-body &optional))
 
-  (when (cst:atom form)
+  (when (stx-cst:stx-atom-p form)
     (parse-error "Malformed function"
                  (note-end source preceding-form "expected body")))
 
-  (assert (cst:proper-list-p form))
+  (assert (stx-cst:stx-proper-list-p form))
 
   (let* (last-node
 
-         (nodes (loop :for nodes := form :then (cst:rest nodes)
-                      :while (cst:consp nodes)
+         (nodes (loop :for nodes := form :then (stx-cst:stx-rest nodes)
+                      :while (stx-cst:stx-consp nodes)
 
                       ;; Not the last node
-                      :if (cst:consp (cst:rest nodes))
-                        :collect (parse-body-element (cst:first nodes) source)
+                      :if (stx-cst:stx-consp (stx-cst:stx-rest nodes))
+                        :collect (parse-body-element (stx-cst:stx-first nodes) source)
 
                       ;; The last node
                       :else
-                        :do (setf last-node (parse-body-last-node (cst:first nodes) source)))))
+                        :do (setf last-node (parse-body-last-node (stx-cst:stx-first nodes) source)))))
 
-    
+
     (make-node-body
      :nodes nodes
      :last-node last-node)))
 
 (defun shorthand-let-p (form)
   "Returns t if FORM is in the form of (let x = y+)"
-  (declare (type cst:cst form)
+  (declare (type stx:syntax-object form)
            (values boolean))
 
   (cond
-    ((cst:atom form)
+    ((stx-cst:stx-atom-p form)
      nil)
 
     ;; (let)
-    ((not (cst:consp (cst:rest form)))
+    ((not (stx-cst:stx-consp (stx-cst:stx-rest form)))
      nil)
 
     ;; (let x)
-    ((not (cst:consp (cst:rest (cst:rest form))))
+    ((not (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest form))))
      nil)
 
     ;; (let x =)
-    ((not (cst:consp (cst:rest (cst:rest (cst:rest form)))))
+    ((not (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest (stx-cst:stx-rest form)))))
      nil)
 
     (t
-     (and (cst:atom (cst:first form))
-          (eq (cst:raw (cst:first form)) 'coalton:let)
-          (cst:atom (cst:third form))
-          (eq (cst:raw (cst:third form)) 'coalton:=)))))
+     (and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq (stx:syntax-e (stx-cst:stx-first form)) 'coalton:let)
+          (stx-cst:stx-atom-p (stx-cst:stx-third form))
+          (eq (stx:syntax-e (stx-cst:stx-third form)) 'coalton:=)))))
 
 ;; Forms passed to parse-node-bind must be previously verified by `shorthand-let-p'
 (defun parse-node-bind (form source)
-  (declare (type cst:cst form)
+  (declare (type stx:syntax-object form)
            (values node-bind))
 
-  (when (cst:consp (cst:rest (cst:rest (cst:rest (cst:rest form)))))
+  (when (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest (stx-cst:stx-rest (stx-cst:stx-rest form)))))
     (parse-error "Malformed shorthand let"
-                 (note source (cst:first (cst:rest (cst:rest (cst:rest (cst:rest form)))))
+                 (note source (stx-cst:stx-first (stx-cst:stx-rest (stx-cst:stx-rest (stx-cst:stx-rest (stx-cst:stx-rest form)))))
                        "unexpected trailing form")))
 
   (make-node-bind
-   :pattern (parse-pattern (cst:second form) source)
-   :expr (parse-expression (cst:fourth form) source)
+   :pattern (parse-pattern (stx-cst:stx-second form) source)
+   :expr (parse-expression (stx-cst:stx-nth 3 form) source)
    :location (form-location source form)))
 
 (defun parse-body-element (form source)
-  (declare (type cst:cst form)
+  (declare (type stx:syntax-object form)
            (values node-body-element &optional))
 
-  (when (cst:atom form)
+  (when (stx-cst:stx-atom-p form)
     (return-from parse-body-element
       (parse-expression form source)))
 
-  (unless (cst:proper-list-p form)
+  (unless (stx-cst:stx-proper-list-p form)
     (parse-error "Malformed body expression"
                  (note source form "unexpected dotted list")))
 
@@ -1765,7 +1766,7 @@ BODY: Expression to evaluate with the captured continuation"
       (parse-expression form source)))
 
 (defun parse-body-last-node (form source)
-  (declare (type cst:cst form)
+  (declare (type stx:syntax-object form)
            (values node &optional))
 
   (when (shorthand-let-p form)
@@ -1776,147 +1777,147 @@ BODY: Expression to evaluate with the captured continuation"
   (parse-expression form source))
 
 (defun parse-let-binding (form source)
-  (declare (type cst:cst form)
+  (declare (type stx:syntax-object form)
            (values node-let-binding &optional))
 
-  (when (cst:atom form)
+  (when (stx-cst:stx-atom-p form)
     (parse-error "Malformed let binding"
                  (note source form "expected list")))
 
-  (unless (cst:proper-list-p form)
+  (unless (stx-cst:stx-proper-list-p form)
     (parse-error "Malformed let binding"
                  (note source form "unexpected dotted list")))
 
   ;; (x)
-  (unless (cst:consp (cst:rest form))
+  (unless (stx-cst:stx-consp (stx-cst:stx-rest form))
     (parse-error "Malformed let binding"
-                 (note-end source (cst:first form)
+                 (note-end source (stx-cst:stx-first form)
                            "let bindings must have a value")))
 
   ;; (a b c ...)
-  (when (cst:consp (cst:rest (cst:rest form)))
+  (when (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest form)))
     (parse-error "Malformed let binding"
-                 (note source (cst:first (cst:rest (cst:rest form)))
+                 (note source (stx-cst:stx-first (stx-cst:stx-rest (stx-cst:stx-rest form)))
                        "unexpected trailing form")))
 
   (make-node-let-binding
-   :name (parse-variable (cst:first form) source)
-   :value (parse-expression (cst:second form) source)
+   :name (parse-variable (stx-cst:stx-first form) source)
+   :value (parse-expression (stx-cst:stx-second form) source)
    :location (form-location source form)))
 
 (defun parse-rec-binding (form source)
-  (declare (type cst:cst form)
+  (declare (type stx:syntax-object form)
            (values node-let-binding &optional))
 
-  (when (cst:atom form)
+  (when (stx-cst:stx-atom-p form)
     (parse-error "Malformed rec binding"
                  (note source form "expected list")))
 
-  (unless (cst:proper-list-p form)
+  (unless (stx-cst:stx-proper-list-p form)
     (parse-error "Malformed rec binding"
                  (note source form "unexpected dotted list")))
 
   ;; (x)
-  (unless (cst:consp (cst:rest form))
+  (unless (stx-cst:stx-consp (stx-cst:stx-rest form))
     (parse-error "Malformed rec binding"
-                 (note-end source (cst:first form)
+                 (note-end source (stx-cst:stx-first form)
                            "rec bindings must have a value")))
 
   ;; (a b c ...)
-  (when (cst:consp (cst:rest (cst:rest form)))
+  (when (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest form)))
     (parse-error "Malformed rec binding"
-                 (note source (cst:first (cst:rest (cst:rest form)))
+                 (note source (stx-cst:stx-first (stx-cst:stx-rest (stx-cst:stx-rest form)))
                        "unexpected trailing form")))
 
   (make-node-let-binding
-   :name (parse-variable (cst:first form) source)
-   :value (parse-expression (cst:second form) source)
+   :name (parse-variable (stx-cst:stx-first form) source)
+   :value (parse-expression (stx-cst:stx-second form) source)
    :location (form-location source form)))
 
 (defun parse-match-branch (form source)
-  (declare (type cst:cst form)
+  (declare (type stx:syntax-object form)
            (values node-match-branch &optional))
 
-  (when (cst:atom form)
+  (when (stx-cst:stx-atom-p form)
     (parse-error "Malformed match branch"
                  (note source form "expected list")))
 
-  (unless (cst:proper-list-p form)
+  (unless (stx-cst:stx-proper-list-p form)
     (parse-error "Malformed match branch"
                  (note source form "unexpected dotted list")))
 
   ;; (P)
-  (unless (cst:consp (cst:rest form))
+  (unless (stx-cst:stx-consp (stx-cst:stx-rest form))
     (parse-error "Malformed match branch"
-                 (note-end source (cst:first form) "expected body")))
+                 (note-end source (stx-cst:stx-first form) "expected body")))
 
   (make-node-match-branch
-   :pattern (parse-pattern (cst:first form) source)
-   :body (parse-body (cst:rest form) form source)
+   :pattern (parse-pattern (stx-cst:stx-first form) source)
+   :body (parse-body (stx-cst:stx-rest form) form source)
    :location (form-location source form)))
 
 (defun parse-catch-branch (form source)
-  (declare (type cst:cst form)
+  (declare (type stx:syntax-object form)
            (values node-catch-branch &optional))
 
-  (when (cst:atom form)
+  (when (stx-cst:stx-atom-p form)
     (parse-error "Malformed catch branch"
                  (note source form "expected list")))
 
-  (unless (cst:proper-list-p form)
+  (unless (stx-cst:stx-proper-list-p form)
     (parse-error "Malformed catch branch"
                  (note source form "unexpected dotted list")))
 
   ;; (P)
-  (unless (cst:consp (cst:rest form))
+  (unless (stx-cst:stx-consp (stx-cst:stx-rest form))
     (parse-error "Malformed catch branch"
-                 (note-end source (cst:first form) "expected body")))
+                 (note-end source (stx-cst:stx-first form) "expected body")))
 
-  (let ((pattern (parse-pattern (cst:first form) source)))
+  (let ((pattern (parse-pattern (stx-cst:stx-first form) source)))
     (when (pattern-var-p pattern)
       (parse-error
        "Malformed catch branch"
-       (note source (cst:first form)
+       (note source (stx-cst:stx-first form)
              "Not Yet Allowed: Catching an exception with a pattern variable")))
 
     (unless (typep pattern '(or pattern-constructor pattern-wildcard))
       (parse-error
        "Malformed catch branch"
-       (note source (cst:first form)
+       (note source (stx-cst:stx-first form)
              "branch must be either an exception type constructor or a wildcard.")))
 
     (make-node-catch-branch
      :pattern pattern
-     :body (parse-body (cst:rest form) form source)
+     :body (parse-body (stx-cst:stx-rest form) form source)
      :location (form-location source form))))
 
 (defun parse-resumable-branch (form source)
-  (declare (type cst:cst form)
+  (declare (type stx:syntax-object form)
            (values node-resumable-branch &optional))
 
-  (when (cst:atom form)
+  (when (stx-cst:stx-atom-p form)
     (parse-error "Malformed resumable branch"
                  (note source form "expected list")))
 
-  (unless (cst:proper-list-p form)
+  (unless (stx-cst:stx-proper-list-p form)
     (parse-error "Malformed resumable branch"
                  (note source form "unexpected dotted list")))
 
   ;; (P)
-  (unless (cst:consp (cst:rest form))
+  (unless (stx-cst:stx-consp (stx-cst:stx-rest form))
     (parse-error "Malformed resumable branch"
-                 (note-end source (cst:first form) "expected body")))
+                 (note-end source (stx-cst:stx-first form) "expected body")))
 
-  (let ((pattern (parse-pattern (cst:first form) source)))
+  (let ((pattern (parse-pattern (stx-cst:stx-first form) source)))
     (unless (typep pattern 'pattern-constructor)
       (parse-error "Malformed resumable branch"
                    (note
                     source
-                    (cst:first form)
+                    (stx-cst:stx-first form)
                     "pattern must match a resumption constructor.")))
     (make-node-resumable-branch
      :pattern  pattern
-     :body (parse-body (cst:rest form) form source)
+     :body (parse-body (stx-cst:stx-rest form) form source)
      :location (form-location source form))))
 
 (defun parse-handle-branch (form source)
@@ -1928,66 +1929,66 @@ Valid forms:
 - (return (x) body...)         - return handler
 
 Returns (VALUES branch is-return-handler-p)"
-  (declare (type cst:cst form)
+  (declare (type stx:syntax-object form)
            (values (or node-handle-branch node-body) boolean &optional))
 
-  (when (cst:atom form)
+  (when (stx-cst:stx-atom-p form)
     (parse-error "Malformed handle branch"
                  (note source form "expected list")))
 
-  (unless (cst:proper-list-p form)
+  (unless (stx-cst:stx-proper-list-p form)
     (parse-error "Malformed handle branch"
                  (note source form "unexpected dotted list")))
 
-  (unless (cst:consp (cst:rest form))
+  (unless (stx-cst:stx-consp (stx-cst:stx-rest form))
     (parse-error "Malformed handle branch"
-                 (note-end source (cst:first form) "expected handler body")))
+                 (note-end source (stx-cst:stx-first form) "expected handler body")))
 
-  (let ((effect-part (cst:first form)))
+  (let ((effect-part (stx-cst:stx-first form)))
     ;; Check if this is a return handler
-    (when (and (cst:atom effect-part)
-               (eq 'coalton:return (cst:raw effect-part)))
+    (when (and (stx-cst:stx-atom-p effect-part)
+               (eq 'coalton:return (stx:syntax-e effect-part)))
       ;; Return handler: (return (x) body...)
       ;; The (x) part is optional - could be (return body...)
-      (let ((rest (cst:rest form)))
+      (let ((rest (stx-cst:stx-rest form)))
         (cond
           ;; (return (x) body...) - with binding
-          ((and (cst:consp rest)
-                (cst:consp (cst:first rest))
-                (cst:proper-list-p (cst:first rest))
-                (= 1 (length (cst:listify (cst:first rest))))
-                (cst:atom (cst:first (cst:first rest)))
-                (symbolp (cst:raw (cst:first (cst:first rest)))))
+          ((and (stx-cst:stx-consp rest)
+                (stx-cst:stx-consp (stx-cst:stx-first rest))
+                (stx-cst:stx-proper-list-p (stx-cst:stx-first rest))
+                (= 1 (length (stx-cst:stx-listify (stx-cst:stx-first rest))))
+                (stx-cst:stx-atom-p (stx-cst:stx-first (stx-cst:stx-first rest)))
+                (symbolp (stx:syntax-e (stx-cst:stx-first (stx-cst:stx-first rest)))))
            ;; Has a binding variable
            ;; For now, just parse the body - type system will handle the binding
            (return-from parse-handle-branch
-             (values (parse-body (cst:rest rest) form source) t)))
+             (values (parse-body (stx-cst:stx-rest rest) form source) t)))
           ;; (return body...) - no binding
           (t
            (return-from parse-handle-branch
              (values (parse-body rest form source) t))))))
 
     ;; Effect handler: (EFFECT.OP (resume) body...) or (EFFECT.OP body...)
-    (unless (and (cst:atom effect-part)
-                 (symbolp (cst:raw effect-part)))
+    (unless (and (stx-cst:stx-atom-p effect-part)
+                 (symbolp (stx:syntax-e effect-part)))
       (parse-error "Malformed handle branch"
                    (note source effect-part "expected effect operation symbol")))
 
-    (let ((effect-name (cst:raw effect-part))
-          (rest (cst:rest form))
+    (let ((effect-name (stx:syntax-e effect-part))
+          (rest (stx-cst:stx-rest form))
           (resume-var nil))
 
       ;; Check for resumption variable: (EFFECT.OP (resume) body...)
-      (when (and (cst:consp rest)
-                 (cst:consp (cst:first rest))
-                 (cst:proper-list-p (cst:first rest))
-                 (= 1 (length (cst:listify (cst:first rest))))
-                 (cst:atom (cst:first (cst:first rest)))
-                 (symbolp (cst:raw (cst:first (cst:first rest)))))
-        (setf resume-var (cst:raw (cst:first (cst:first rest))))
-        (setf rest (cst:rest rest)))
+      (when (and (stx-cst:stx-consp rest)
+                 (stx-cst:stx-consp (stx-cst:stx-first rest))
+                 (stx-cst:stx-proper-list-p (stx-cst:stx-first rest))
+                 (= 1 (length (stx-cst:stx-listify (stx-cst:stx-first rest))))
+                 (stx-cst:stx-atom-p (stx-cst:stx-first (stx-cst:stx-first rest)))
+                 (symbolp (stx:syntax-e (stx-cst:stx-first (stx-cst:stx-first rest)))))
+        (setf resume-var (stx:syntax-e (stx-cst:stx-first (stx-cst:stx-first rest))))
+        (setf rest (stx-cst:stx-rest rest)))
 
-      (unless (cst:consp rest)
+      (unless (stx-cst:stx-consp rest)
         (parse-error "Malformed handle branch"
                      (note-end source effect-part "expected handler body")))
 
@@ -2000,43 +2001,43 @@ Returns (VALUES branch is-return-handler-p)"
        nil))))
 
 (defun parse-cond-clause (form source)
-  (declare (type cst:cst form)
+  (declare (type stx:syntax-object form)
            (values node-cond-clause))
 
-  (when (cst:atom form)
+  (when (stx-cst:stx-atom-p form)
     (parse-error "Malformed cond clause"
                  (note source form "expected list")))
 
-  (unless (cst:proper-list-p form)
+  (unless (stx-cst:stx-proper-list-p form)
     (parse-error "Malformed cond clause"
                  (note source form "unexpected dotted list")))
 
   (make-node-cond-clause
-   :expr (parse-expression (cst:first form) source)
-   :body (parse-body (cst:rest form) (cst:first form) source)
+   :expr (parse-expression (stx-cst:stx-first form) source)
+   :body (parse-body (stx-cst:stx-rest form) (stx-cst:stx-first form) source)
    :location (form-location source form)))
 
 (defun parse-do (form source)
-  (declare (type cst:cst form))
+  (declare (type stx:syntax-object form))
 
-  (assert (cst:consp form))
+  (assert (stx-cst:stx-consp form))
 
-  (unless (cst:consp (cst:rest form))
+  (unless (stx-cst:stx-consp (stx-cst:stx-rest form))
     (parse-error "Malformed do expression"
-                 (note-end source (cst:first form) "expected one or more forms")))
+                 (note-end source (stx-cst:stx-first form) "expected one or more forms")))
 
   (let* (last-node
 
-         (nodes (loop :for nodes := (cst:rest form) :then (cst:rest nodes)
-                      :while (cst:consp nodes)
-                      :for node := (cst:first nodes)
+         (nodes (loop :for nodes := (stx-cst:stx-rest form) :then (stx-cst:stx-rest nodes)
+                      :while (stx-cst:stx-consp nodes)
+                      :for node := (stx-cst:stx-first nodes)
 
                       ;; Not the last node
-                      :if (cst:consp (cst:rest nodes))
+                      :if (stx-cst:stx-consp (stx-cst:stx-rest nodes))
                         :collect (parse-do-body-element node source)
 
                       :else
-                        :do (setf last-node (parse-do-body-last-node node (cst:first form) source)))))
+                        :do (setf last-node (parse-do-body-last-node node (stx-cst:stx-first form) source)))))
 
     (make-node-do
      :nodes nodes
@@ -2045,45 +2046,45 @@ Returns (VALUES branch is-return-handler-p)"
 
 (defun do-bind-p (form)
   "Returns t if FORM is in the form of (x <- y+)"
-  (declare (type cst:cst form)
+  (declare (type stx:syntax-object form)
            (values boolean))
 
   (cond
-    ((not (cst:consp form))
+    ((not (stx-cst:stx-consp form))
      nil)
 
     ;; (x)
-    ((not (cst:consp (cst:rest form)))
+    ((not (stx-cst:stx-consp (stx-cst:stx-rest form)))
      nil)
 
     ;; (x y)
-    ((not (cst:consp (cst:rest (cst:rest form))))
+    ((not (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest form))))
      nil)
 
     ;; (x (y) ...)
-    ((not (cst:atom (cst:second form)))
+    ((not (stx-cst:stx-atom-p (stx-cst:stx-second form)))
      nil)
 
     (t
-     (eq 'coalton:<- (cst:raw (cst:second form))))))
+     (eq 'coalton:<- (stx:syntax-e (stx-cst:stx-second form))))))
 
 ;; Forms passed to this function must first be validated with `do-bind-p'
 (defun parse-node-do-bind (form source)
-  (declare (type cst:cst form)
+  (declare (type stx:syntax-object form)
            (values node-do-bind))
 
-  (when (cst:consp (cst:rest (cst:rest (cst:rest form))))
+  (when (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest (stx-cst:stx-rest form))))
     (parse-error "Malformed bind form"
-                 (note source (cst:first (cst:rest (cst:rest (cst:rest form))))
+                 (note source (stx-cst:stx-first (stx-cst:stx-rest (stx-cst:stx-rest (stx-cst:stx-rest form))))
                        "unexpected trailing form")))
 
   (make-node-do-bind
-   :pattern (parse-pattern (cst:first form) source)
-   :expr (parse-expression (cst:third form) source)
+   :pattern (parse-pattern (stx-cst:stx-first form) source)
+   :expr (parse-expression (stx-cst:stx-third form) source)
    :location (form-location source form)))
 
 (defun parse-do-body-element (form source)
-  (declare (type cst:cst form)
+  (declare (type stx:syntax-object form)
            (values node-do-body-element &optional))
 
   (cond
@@ -2097,8 +2098,8 @@ Returns (VALUES branch is-return-handler-p)"
      (parse-expression form source))))
 
 (defun parse-do-body-last-node (form parent-form source)
-  (declare (type cst:cst form)
-           (type cst:cst parent-form)
+  (declare (type stx:syntax-object form)
+           (type stx:syntax-object parent-form)
            (values node &optional))
 
   (when (shorthand-let-p form)
@@ -2116,23 +2117,23 @@ Returns (VALUES branch is-return-handler-p)"
   (parse-expression form source))
 
 (defun parse-let-declare (form source)
-  (declare (type cst:cst form)
+  (declare (type stx:syntax-object form)
            (values node-let-declare))
 
-  (assert (cst:consp form))
-  (assert (cst:consp (cst:rest form)))
-  (assert (cst:consp (cst:rest (cst:rest form))))
+  (assert (stx-cst:stx-consp form))
+  (assert (stx-cst:stx-consp (stx-cst:stx-rest form)))
+  (assert (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest form))))
 
-  (assert (cst:atom (cst:first form)))
-  (assert (eq (cst:raw (cst:first form)) 'coalton:declare))
+  (assert (stx-cst:stx-atom-p (stx-cst:stx-first form)))
+  (assert (eq (stx:syntax-e (stx-cst:stx-first form)) 'coalton:declare))
 
-  (when (cst:consp (cst:rest (cst:rest (cst:rest form))))
+  (when (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest (stx-cst:stx-rest form))))
     (parse-error "Malformed declare"
-                 (note source (cst:fourth form) "unexpected form")))
+                 (note source (stx-cst:stx-nth 3 form) "unexpected form")))
 
   (make-node-let-declare
-   :name (parse-variable (cst:second form) source)
-   :type (parse-qualified-type (cst:third form) source)
+   :name (parse-variable (stx-cst:stx-second form) source)
+   :type (parse-qualified-type (stx-cst:stx-third form) source)
    :location (form-location source form)))
 
 (defun take-label (form)
@@ -2145,13 +2146,13 @@ if MAYBEKEYWORD is a keyword, or else
 
 NIL (MAYBEKEYWORD . REST) NIL
 
-if (CST:SECOND FORM) is not a keyword."
-  (declare (type cst:cst form)
-           (values (or keyword null) cst:cst))
-  (if (and (cst:consp (cst:rest form))
-           (cst:atom (cst:second form))
-           (keywordp (cst:raw (cst:second form))))
-      (values (cst:raw (cst:second form))
-              (cst:nthrest 2 form)
-              (cst:second form))
-      (values nil (cst:rest form) nil)))
+if (STX-CST:STX-SECOND FORM) is not a keyword."
+  (declare (type stx:syntax-object form)
+           (values (or keyword null) stx:syntax-object))
+  (if (and (stx-cst:stx-consp (stx-cst:stx-rest form))
+           (stx-cst:stx-atom-p (stx-cst:stx-second form))
+           (keywordp (stx:syntax-e (stx-cst:stx-second form))))
+      (values (stx:syntax-e (stx-cst:stx-second form))
+              (stx-cst:stx-nthrest 2 form)
+              (stx-cst:stx-second form))
+      (values nil (stx-cst:stx-rest form) nil)))

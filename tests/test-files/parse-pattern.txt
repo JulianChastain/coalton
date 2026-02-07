@@ -28,7 +28,7 @@ error: Invalid pattern
 
 --------------------------------------------------------------------------------
 
-error: Invalid pattern
+error: Malformed list
   --> test:4:7
    |
  4 |    (let (x y . z) = g)

@@ -78,7 +78,7 @@ error: Malformed let
 
 --------------------------------------------------------------------------------
 
-error: Malformed let binding
+error: Malformed list
   --> test:4:8
    |
  4 |    (let ((y 2 . 3))

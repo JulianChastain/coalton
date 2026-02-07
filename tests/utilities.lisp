@@ -3,6 +3,15 @@
 (defun run-coalton-tests ()
   (run-package-tests
    :packages '(:coalton-tests
+               :coalton-impl/parser/cursor-tests
+               :coalton-impl/parser/scope-tests
+               :coalton-impl/parser/syntax-object-tests
+               :coalton-impl/parser/binding-table-tests
+               :coalton-impl/parser/definition-context-tests
+               :coalton-impl/parser/syntax-cst-tests
+               :coalton-impl/parser/hygienic-macro-tests
+               :coalton-impl/parser/hygienic-integration-tests
+               :coalton/tests/parser/syntax-case-tests
                :quil-coalton-tests
                :thih-coalton/fiasco-test-package)
    :interactive t))
@@ -51,7 +60,8 @@
                                    (source (source:make-source-string unparsed-type)))
                                (with-open-stream (stream (source:source-stream source))
                                  (let* ((ast-type (parser:parse-qualified-type
-                                                   (eclector.concrete-syntax-tree:read stream)
+                                                   (coalton-impl/parser/syntax-cst:cst->syntax
+                                                    (eclector.concrete-syntax-tree:read stream))
                                                    source))
                                         (parsed-type (tc:parse-ty-scheme ast-type env)))
                                    (is (tc:ty-scheme=

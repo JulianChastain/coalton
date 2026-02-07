@@ -26,7 +26,8 @@
   (let ((source (source:make-source-string string :name "test")))
     (with-open-stream (stream (source:source-stream source))
       (parser:with-reader-context stream
-        (funcall fn (parser:maybe-read-form stream parser::*coalton-eclector-client*) source)))))
+        (let ((cst (parser:maybe-read-form stream parser::*coalton-eclector-client*)))
+          (funcall fn (and cst (stx-cst:cst->syntax cst)) source))))))
 
 (defun parse-coalton-expression (string &optional (hygienic nil))
   "Parse STRING as a Coalton expression.
@@ -151,7 +152,7 @@ When HYGIENIC is true, use hygienic macro expansion."
                 (when form
                   (let ((result (macro:expand-macro-hygienic-wrapper form source)))
                     (is (not (null result)))
-                    (is (typep result 'cst:cst)))))))
+                    (is (typep result 'stx:syntax-object)))))))
 
 (deftest make-cl-macro-transformer-creates-function ()
   "make-cl-macro-transformer returns a function"
@@ -304,12 +305,12 @@ When HYGIENIC is true, use hygienic macro expansion."
               (lambda (form source)
                 (declare (ignore source))
                 (when form
-                  ;; Convert to syntax
-                  (let* ((stx (stx-cst:cst->syntax form))
-                         ;; Convert back to CST
-                         (back (macro:syntax->cst stx (cst:source form))))
+                  ;; form is already a syntax object from parse-form
+                  ;; Convert to CST and back, check datum is preserved
+                  (let* ((datum (stx:syntax->datum form))
+                         (back (macro:syntax->cst form (stx:syntax-object-source form))))
                     ;; Raw datum should be preserved
-                    (is (equal (cst:raw form) (cst:raw back))))))))
+                    (is (equal datum (cst:raw back))))))))
 
 (defun flatten-datum (tree)
   "Flatten a nested list into a flat list of atoms."
@@ -326,10 +327,10 @@ When HYGIENIC is true, use hygienic macro expansion."
                 (lambda (form source)
                   (declare (ignore source))
                   (when form
-                    (let ((stx (stx-cst:cst->syntax form)))
-                      ;; The datum should contain 'my-var
-                      (let ((datum (stx:syntax->datum stx)))
-                        (is (member 'my-var (flatten-datum datum))))))))))
+                    ;; form is already a syntax object from parse-form
+                    ;; The datum should contain 'my-var
+                    (let ((datum (stx:syntax->datum form)))
+                      (is (member 'my-var (flatten-datum datum)))))))))
 
 ;;;
 ;;; Macro Expansion Integration
@@ -343,7 +344,7 @@ When HYGIENIC is true, use hygienic macro expansion."
                   (when form
                     (let ((expanded (macro:expand-macro-hygienic-wrapper form source)))
                       ;; Should return a CST
-                      (is (typep expanded 'cst:cst))))))))
+                      (is (typep expanded 'stx:syntax-object))))))))
 
 (deftest when-macro-expands-to-if ()
   "The when macro should expand to an if form"
@@ -353,6 +354,6 @@ When HYGIENIC is true, use hygienic macro expansion."
                   (when form
                     (let ((expanded (macro:expand-macro-hygienic-wrapper form source)))
                       ;; Should be expanded (when -> if)
-                      (is (typep expanded 'cst:cst))
+                      (is (typep expanded 'stx:syntax-object))
                       ;; Raw should start with IF
-                      (is (eq 'if (first (cst:raw expanded))))))))))
+                      (is (eq 'if (first (stx:syntax->datum expanded))))))))))

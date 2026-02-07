@@ -4,9 +4,10 @@
   (:shadow
    #:parse-error)
   (:local-nicknames
-   (#:cst #:concrete-syntax-tree)
    (#:source #:coalton-impl/source)
-   (#:util #:coalton-impl/util))
+   (#:util #:coalton-impl/util)
+   (#:stx #:coalton-impl/parser/syntax-object)
+   (#:stx-cst #:coalton-impl/parser/syntax-cst))
   (:export
    #:identifier                         ; TYPE
    #:identifierp                        ; FUNCTION
@@ -80,12 +81,12 @@
 
 (defun parse-list (f list_ file)
   (declare (type function f)
-           (type cst:cst list_)
+           (type stx:syntax-object list_)
            (values list))
 
-  (loop :for list := list_ :then (cst:rest list)
-        :while (cst:consp list)
-        :collect (funcall f (cst:first list) file)))
+  (loop :for list := list_ :then (stx-cst:stx-rest list)
+        :while (stx-cst:stx-consp list)
+        :collect (funcall f (stx-cst:stx-first list) file)))
 
 ;;; Condition types and helper functions specific to errors
 ;;; encountered during parsing.
@@ -106,9 +107,9 @@
   (error 'parse-error :message message :notes notes))
 
 (defun ensure-span (spanning)
-  "Is SPANNING is a span, return it unchanged; if it is a cst node, return the node's span."
+  "If SPANNING is a span, return it unchanged; if it is a syntax object, return its source span."
   (etypecase spanning
-    (cst:cst     (cst:source spanning))
+    (stx:syntax-object (stx-cst:stx-source spanning))
     (source:span spanning)))
 
 (defun note (source locatable format-string &rest format-args)
@@ -136,7 +137,7 @@
   (apply #'source:help (source:make-location source (ensure-span locatable))
          replace format-string format-args))
 
-(defun form-location (source cst)
-  "Make a source location from a SOURCE and a CST node."
-  (declare (type cst:cst cst))
-  (source:make-location source (cst:source cst)))
+(defun form-location (source form)
+  "Make a source location from a SOURCE and a syntax object."
+  (declare (type stx:syntax-object form))
+  (source:make-location source (stx-cst:stx-source form)))

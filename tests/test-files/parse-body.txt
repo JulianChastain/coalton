@@ -24,7 +24,7 @@ error: Malformed function
 
 --------------------------------------------------------------------------------
 
-error: Malformed expression
+error: Malformed list
   --> test:3:10
    |
  3 |  (define x (progn 1 2 . 3))
@@ -43,7 +43,7 @@ error: Malformed expression
 
 --------------------------------------------------------------------------------
 
-error: Malformed body expression
+error: Malformed list
   --> test:5:4
    |
  5 |      (let x = 5 . 5)

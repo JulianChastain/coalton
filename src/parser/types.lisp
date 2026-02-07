@@ -6,9 +6,10 @@
    #:coalton-impl/parser/base
    #:parse-error)
   (:local-nicknames
-   (#:cst #:concrete-syntax-tree)
    (#:source #:coalton-impl/source)
-   (#:util #:coalton-impl/util))
+   (#:util #:coalton-impl/util)
+   (#:stx #:coalton-impl/parser/syntax-object)
+   (#:stx-cst #:coalton-impl/parser/syntax-cst))
   (:export
    #:ty                                 ; STRUCT
    #:ty-list                            ; TYPE
@@ -199,9 +200,9 @@ the list (T1 T2 T3 T4 ...). Otherwise, return (LIST TYPE)."
     flattened-type))
 
 (defun parse-qualified-type (form source)
-  (declare (type cst:cst form))
+  (declare (type stx:syntax-object form))
 
-  (if (cst:atom form)
+  (if (stx-cst:stx-atom-p form)
 
       (make-qualified-ty
        :predicates nil
@@ -209,10 +210,10 @@ the list (T1 T2 T3 T4 ...). Otherwise, return (LIST TYPE)."
        :location (form-location source form))
 
       (multiple-value-bind (left right)
-          (util:take-until (lambda (cst)
-                             (and (cst:atom cst)
-                                  (eq (cst:raw cst) 'coalton:=>)))
-                           (cst:listify form))
+          (util:take-until (lambda (stx)
+                             (and (stx-cst:stx-atom-p stx)
+                                  (eq (stx:syntax-e stx) 'coalton:=>)))
+                           (stx-cst:stx-listify form))
         (cond
           ;; no predicates
           ((null right)
@@ -224,13 +225,13 @@ the list (T1 T2 T3 T4 ...). Otherwise, return (LIST TYPE)."
           ;; (=> T -> T)
           ((and (null left) right)
            (apply #'parse-error "Malformed type"
-                  (cons (note source (cst:first form) "unnecessary `=>`")
+                  (cons (note source (stx-cst:stx-first form) "unnecessary `=>`")
                         (cond
                           ;; If this is the only thing in the list then don't suggest anything
-                          ((cst:atom (cst:rest form))
+                          ((stx-cst:stx-atom-p (stx-cst:stx-rest form))
                            nil)
                           ;; If there is nothing to the right of C then emit without list
-                          ((cst:atom (cst:rest (cst:rest form)))
+                          ((stx-cst:stx-atom-p (stx-cst:stx-rest (stx-cst:stx-rest form)))
                            (list (help source form
                                        (lambda (existing)
                                          (subseq existing 4 (1- (length existing))))
@@ -246,24 +247,23 @@ the list (T1 T2 T3 T4 ...). Otherwise, return (LIST TYPE)."
           ;; (... =>)
           ((null (rest right))
            (parse-error "Malformed type"
-                        (note source (cst:source (cst:second form))
+                        (note source (stx-cst:stx-source (stx-cst:stx-second form))
                               "missing type after `=>`")))
 
           (t
            (let (predicates)
-             (if (cst:atom (first left))
+             (if (stx-cst:stx-atom-p (first left))
                  (setf predicates (list (parse-predicate
                                          left
                                          (source:make-location source
-                                                               (cons (car (cst:source (first left)))
-                                                                     (cdr (cst:source (car (last left)))))))))
+                                                               (stx-cst:stx-source-range left)))))
 
                  (loop :for pred :in left
-                       :unless (cst:consp pred)
+                       :unless (stx-cst:stx-consp pred)
                          :do (parse-error "Malformed type predicate"
-                                          (note source (cst:second form)
+                                          (note source (stx-cst:stx-second form)
                                                 "expected predicate"))
-                       :do (push (parse-predicate (cst:listify pred)
+                       :do (push (parse-predicate (stx-cst:stx-listify pred)
                                                   (form-location source form))
                                  predicates)))
 
@@ -272,12 +272,12 @@ the list (T1 T2 T3 T4 ...). Otherwise, return (LIST TYPE)."
               :type (parse-type-list
                      (cdr right)
                      (source:make-location source
-                                           (cons (car (cst:source (second right)))
-                                                 (cdr (cst:source (car (last right)))))))
+                                           (cons (car (stx-cst:stx-source (second right)))
+                                                 (cdr (stx-cst:stx-source (car (last right)))))))
               :location (form-location source form))))))))
 
 (defun parse-predicate (forms location)
-  (declare (type util:cst-list forms)
+  (declare (type list forms)
            (type source:location location)
            (values ty-predicate))
 
@@ -285,7 +285,7 @@ the list (T1 T2 T3 T4 ...). Otherwise, return (LIST TYPE)."
   (let ((source (source:location-source location)))
     (cond
       ;; (T) ... => ....
-      ((not (cst:atom (first forms)))
+      ((not (stx-cst:stx-atom-p (first forms)))
        (parse-error "Malformed type predicate"
                     (note source (first forms)
                           "expected class name")
@@ -295,12 +295,12 @@ the list (T1 T2 T3 T4 ...). Otherwise, return (LIST TYPE)."
                           "remove parentheses")))
 
       ;; "T" ... => ...
-      ((not (identifierp (cst:raw (first forms))))
+      ((not (identifierp (stx:syntax-e (first forms))))
        (parse-error "Malformed type predicate"
                     (note source (first forms) "expected identifier")))
 
       (t
-       (let ((name (cst:raw (first forms))))
+       (let ((name (stx:syntax-e (first forms))))
          (when (= 1 (length forms))
            (parse-error "Malformed type predicate"
                         (note source (first forms)
@@ -309,39 +309,39 @@ the list (T1 T2 T3 T4 ...). Otherwise, return (LIST TYPE)."
          (make-ty-predicate
           :class (make-identifier-src
                   :name name
-                  :source-name (source:extract-source-text source (cst:source (first forms)))
+                  :source-name (source:extract-source-text source (stx-cst:stx-source (first forms)))
                   :location (form-location source (first forms)))
           :types (loop :for form :in (cdr forms)
                        :collect (parse-type form source))
           :location location))))))
 
 (defun parse-type (form source)
-  (declare (type cst:cst form)
+  (declare (type stx:syntax-object form)
            (values ty &optional))
 
   (cond
-    ((and (cst:atom form)
-          (symbolp (cst:raw form))
-          (cst:raw form))
+    ((and (stx-cst:stx-atom-p form)
+          (symbolp (stx:syntax-e form))
+          (stx:syntax-e form))
 
-     (if (equalp (symbol-package (cst:raw form)) util:+keyword-package+)
-         (make-tyvar :name (cst:raw form) :location (form-location source form))
-         (make-tycon :name (cst:raw form) :location (form-location source form))))
+     (if (equalp (symbol-package (stx:syntax-e form)) util:+keyword-package+)
+         (make-tyvar :name (stx:syntax-e form) :location (form-location source form))
+         (make-tycon :name (stx:syntax-e form) :location (form-location source form))))
 
-    ((cst:atom form)
+    ((stx-cst:stx-atom-p form)
      (parse-error "Malformed type"
                   (note source form "expected identifier")))
 
     ;; (T)
-    ((cst:atom (cst:rest form))
+    ((stx-cst:stx-atom-p (stx-cst:stx-rest form))
      (parse-error "Malformed type"
                   (note source form "unexpected nullary type")))
 
     (t
-     (parse-type-list (cst:listify form) (form-location source form)))))
+     (parse-type-list (stx-cst:stx-listify form) (form-location source form)))))
 
 (defun parse-type-list (forms location)
-  (declare (type util:cst-list forms)
+  (declare (type list forms)
            (type source:location location)
            (values ty &optional))
 
@@ -350,9 +350,9 @@ the list (T1 T2 T3 T4 ...). Otherwise, return (LIST TYPE)."
   (if (= 1 (length forms))
       (parse-type (first forms) (source:location-source location))
       (multiple-value-bind (left right)
-          (util:take-until (lambda (cst)
-                             (and (cst:atom cst)
-                                  (eq (cst:raw cst) 'coalton:->)))
+          (util:take-until (lambda (stx)
+                             (and (stx-cst:stx-atom-p stx)
+                                  (eq (stx:syntax-e stx) 'coalton:->)))
                            forms)
 
         ;; (T ... ->)
@@ -388,12 +388,12 @@ the list (T1 T2 T3 T4 ...). Otherwise, return (LIST TYPE)."
                          :to ty
                          :location (source:make-location (source:location-source location)
                                                          (cons (car (source:location-span (ty-location ty)))
-                                                               (cdr (cst:source (first right))))))
+                                                               (cdr (stx-cst:stx-source (first right))))))
                   :to (parse-type-list
                        (cdr right)
                        (source:make-location (source:location-source location)
-                                             (cons (car (cst:source (first right)))
-                                                   (cdr (cst:source (car (last right)))))))
+                                             (cons (car (stx-cst:stx-source (first right)))
+                                                   (cdr (stx-cst:stx-source (car (last right)))))))
                   :location location))))))))
 
 ;;;
@@ -410,7 +410,7 @@ Effect rows can be:
 - A union of effects: (E1 | E2 | ...)
 - A parameterized effect: (State Integer)
 
-FORMS: List of CST forms representing the effect row
+FORMS: List of syntax object forms representing the effect row
 LOCATION: Source location for error reporting"
   (declare (type list forms)
            (type source:location location)
@@ -423,8 +423,8 @@ LOCATION: Source location for error reporting"
        (let ((form (first forms)))
          (cond
            ;; Atom: effect name or type variable
-           ((cst:atom form)
-            (let ((raw (cst:raw form)))
+           ((stx-cst:stx-atom-p form)
+            (let ((raw (stx:syntax-e form)))
               (cond
                 ;; Pure - no effects (user writes "Pure", internal symbol is %pure-effect)
                 ((string-equal (symbol-name raw) "PURE")
@@ -444,7 +444,7 @@ LOCATION: Source location for error reporting"
                               (note source form "expected effect name or type variable"))))))
            ;; List: union or parameterized effect
            (t
-            (parse-effect-row-list (cst:listify form) location)))))
+            (parse-effect-row-list (stx-cst:stx-listify form) location)))))
 
       ;; Multiple forms: should be a union written inline
       (t
@@ -456,16 +456,16 @@ LOCATION: Source location for error reporting"
 Handles:
 - Effect union: (E1 | E2 | ...)
 - Parameterized effect: (State Integer)"
-  (declare (type util:cst-list forms)
+  (declare (type list forms)
            (type source:location location)
            (values ty &optional))
 
   (let ((source (source:location-source location)))
     ;; Check if it's a union (contains |)
     (multiple-value-bind (left right)
-        (util:take-until (lambda (cst)
-                           (and (cst:atom cst)
-                                (let ((raw (cst:raw cst)))
+        (util:take-until (lambda (stx)
+                           (and (stx-cst:stx-atom-p stx)
+                                (let ((raw (stx:syntax-e stx)))
                                   (and (symbolp raw)
                                        (string= (symbol-name raw) "|")))))
                          forms)
@@ -490,12 +490,12 @@ Handles:
               (parse-effect-row forms location)
               ;; Parameterized effect: (State :s)
               (let ((effect-name (first forms)))
-                (unless (and (cst:atom effect-name)
-                             (symbolp (cst:raw effect-name)))
+                (unless (and (stx-cst:stx-atom-p effect-name)
+                             (symbolp (stx:syntax-e effect-name)))
                   (parse-error "Malformed parameterized effect"
                                (note source effect-name "expected effect name")))
                 ;; Parse as type application
-                (let ((base (make-ty-effect-ref :name (cst:raw effect-name)
+                (let ((base (make-ty-effect-ref :name (stx:syntax-e effect-name)
                                                 :location (form-location source effect-name))))
                   (loop :for form :in (rest forms)
                         :for ty := (parse-type form source)

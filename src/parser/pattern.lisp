@@ -6,9 +6,10 @@
    #:coalton-impl/parser/base
    #:parse-error)
   (:local-nicknames
-   (#:cst #:concrete-syntax-tree)
    (#:source #:coalton-impl/source)
-   (#:util #:coalton-impl/util))
+   (#:util #:coalton-impl/util)
+   (#:stx #:coalton-impl/parser/syntax-object)
+   (#:stx-cst #:coalton-impl/parser/syntax-cst))
   (:export
    #:pattern                            ; STRUCT
    #:pattern-list                       ; TYPE
@@ -105,82 +106,82 @@ runtime value and binds it to a variable."
   (patterns (util:required 'patterns) :type pattern-list         :read-only t))
 
 (defun parse-pattern (form source)
-  (declare (type cst:cst form))
+  (declare (type stx:syntax-object form))
 
   (cond
-    ((and (cst:consp form)
-          (cst:atom (cst:first form))
-          (eq 'coalton:= (cst:raw (cst:first form))))
-     (let (var pattern) 
+    ((and (stx-cst:stx-consp form)
+          (stx-cst:stx-atom-p (stx-cst:stx-first form))
+          (eq 'coalton:= (stx:syntax-e (stx-cst:stx-first form))))
+     (let (var pattern)
 
        ;; (=)
-       (unless (cst:consp (cst:rest form))
+       (unless (stx-cst:stx-consp (stx-cst:stx-rest form))
          (parse-error "Invalid pattern"
                       (note source form "body expected")))
 
-       (setf var (parse-pattern (cst:second form) source))
-       
+       (setf var (parse-pattern (stx-cst:stx-second form) source))
+
        (unless (pattern-var-p var)
          (parse-error "Invalid pattern"
-                      (note source (cst:second form) "pattern variable expected")))
-       
+                      (note source (stx-cst:stx-second form) "pattern variable expected")))
+
        ;; (= pvar)
-       (unless (cst:consp (cst:rest (cst:rest form)))
+       (unless (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest form)))
          (parse-error "Invalid pattern"
                       (note source form "bound pattern expected")))
 
-       (setf pattern (parse-pattern (cst:third form) source))
+       (setf pattern (parse-pattern (stx-cst:stx-third form) source))
 
        ;; (= pvar pat ...)
-       (when (cst:consp (cst:rest (cst:rest (cst:rest form))))
+       (when (stx-cst:stx-consp (stx-cst:stx-rest (stx-cst:stx-rest (stx-cst:stx-rest form))))
          (parse-error "Invalid pattern"
-                      (note source (cst:third form) "unexpected expression after bound pattern")))
-       
+                      (note source (stx-cst:stx-third form) "unexpected expression after bound pattern")))
+
        (make-pattern-binding
         :location (form-location source form)
         :var var
         :pattern pattern)))
-    
-    ((and (cst:atom form)
-          (typep (cst:raw form) 'util:literal-value))
+
+    ((and (stx-cst:stx-atom-p form)
+          (typep (stx:syntax-e form) 'util:literal-value))
      (make-pattern-literal
-      :value (cst:raw form)
+      :value (stx:syntax-e form)
       :location (form-location source form)))
 
-    ((and (cst:atom form)
-          (eq (cst:raw form) 'coalton:_))
+    ((and (stx-cst:stx-atom-p form)
+          (eq (stx:syntax-e form) 'coalton:_))
      (make-pattern-wildcard
       :location (form-location source form)))
 
-    ((and (cst:atom form)
-          (identifierp (cst:raw form)))
-     (when (string= "_" (symbol-name (cst:raw form)))
+    ((and (stx-cst:stx-atom-p form)
+          (identifierp (stx:syntax-e form)))
+     (when (string= "_" (symbol-name (stx:syntax-e form)))
        (parse-error "Invalid pattern"
                     (note source form "invalid variable name '_'")))
      (make-pattern-var
-      :name (cst:raw form)
-      :orig-name (cst:raw form)
+      :name (stx:syntax-e form)
+      :orig-name (stx:syntax-e form)
       :location (form-location source form)))
 
-    ((cst:atom form)
+    ((stx-cst:stx-atom-p form)
      (parse-error "Invalid pattern"
                   (note source form "unknown pattern literal")))
 
-    ((not (cst:proper-list-p form))
+    ((not (stx-cst:stx-proper-list-p form))
      (parse-error "Invalid pattern"
                   (note source form "unexpected dotted list")))
 
-    ((not (and (cst:atom (cst:first form))
-               (identifierp (cst:raw (cst:first form)))))
+    ((not (and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+               (identifierp (stx:syntax-e (stx-cst:stx-first form)))))
      (parse-error "Invalid pattern"
-                  (note source (cst:first form) "invalid constructor in pattern")))
+                  (note source (stx-cst:stx-first form) "invalid constructor in pattern")))
 
     (t
      (make-pattern-constructor
-      :name (cst:raw (cst:first form))
-      :patterns (loop :for patterns := (cst:rest form) :then (cst:rest patterns)
-                      :while (cst:consp patterns)
-                      :collect (parse-pattern (cst:first patterns) source))
+      :name (stx:syntax-e (stx-cst:stx-first form))
+      :patterns (loop :for patterns := (stx-cst:stx-rest form) :then (stx-cst:stx-rest patterns)
+                      :while (stx-cst:stx-consp patterns)
+                      :collect (parse-pattern (stx-cst:stx-first patterns) source))
       :location (form-location source form)))))
 
 (defun pattern-variables (pattern)

@@ -78,7 +78,7 @@ EQL-specialize on symbol `class'."))
         :for derive := (parser:type-definition-derive type)
         :for classes := (and derive (parser:attribute-derive-classes derive))
         :unless (null classes)
-          :nconc (loop :for class :in (cst:raw classes)
+          :nconc (loop :for class :in (parser:syntax->datum classes)
                        :collect (make-toplevel-derivation
                                  :type-definition type
                                  :class class))))

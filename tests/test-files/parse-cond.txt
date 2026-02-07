@@ -40,7 +40,7 @@ error: Malformed cond clause
 
 --------------------------------------------------------------------------------
 
-error: Malformed cond clause
+error: Malformed list
   --> test:3:16
    |
  3 |  (define x (cond (1 2 . 3)))

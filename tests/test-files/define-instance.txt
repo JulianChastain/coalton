@@ -160,11 +160,9 @@ error: Malformed method definition
 
 --------------------------------------------------------------------------------
 
-error: Malformed method definition
+error: Malformed list
   --> test:4:2
    |
- 3 |  (define-instance (C :a)
-   |                   ------ when parsing instance
  4 |    (1 2 . 3))
    |    ^^^^^^^^^ unexpected dotted list
 
@@ -216,7 +214,7 @@ error: Malformed method definition
 
 --------------------------------------------------------------------------------
 
-error: Malformed instance definition
+error: Malformed list
   --> test:3:17
    |
  3 |  (define-instance (C :a . :b))
