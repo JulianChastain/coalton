@@ -320,36 +320,3 @@
                  (coalton-library/continuations:cont-pure
                   (coalton-library/classes:+ sum (coalton-library/math/arith:/ prod 2))))))))))))
 
-;;;
-;;; Run all continuation tests
-;;;
-
-(defun run-continuation-tests ()
-  "Run all continuation tests."
-  (run! 'test-cont-pure)
-  (run! 'test-cont-functor)
-  (run! 'test-cont-monad)
-  (run! 'test-cont-bind-chain)
-  (run! 'test-cps-map)
-  (run! 'test-cps-fold)
-  (run! 'test-cps-filter)
-  (run! 'test-cps-find)
-  (run! 'test-cps-all-true)
-  (run! 'test-cps-all-false)
-  (run! 'test-cps-any-true)
-  (run! 'test-cps-any-false)
-  (run! 'test-cps-sum)
-  (run! 'test-cps-product)
-  (run! 'test-cps-sequence)
-  (run! 'test-cps-replicate)
-  (run! 'test-cps-iterate)
-  (run! 'test-cont-reset)
-  (run! 'test-abort-to-prompt)
-  (run! 'test-cps-compose)
-  (run! 'test-cps-const)
-  (run! 'test-cps-id)
-  (run! 'test-cps-map-optional-some)
-  (run! 'test-cps-map-optional-none)
-  (run! 'test-cps-map-ok)
-  (run! 'test-cps-map-err)
-  (run! 'test-cont-complex-chain))

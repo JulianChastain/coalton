@@ -45,11 +45,17 @@ And return a Step that may or may not invoke the continuation.")
     "Apply a handler to a value and resume continuation."
     (lisp (Step :c) (h value resume)
       (cl:let ((handler-fn (effect-handler-internal-handler-fn h)))
-        (cl:if handler-fn
-               (call-coalton-function
-                (call-coalton-function handler-fn value)
-                resume)
-               (StepFail "Handler function is nil"))))))
+        (cl:cond
+          ((cl:null handler-fn)
+           (StepFail "Handler function is nil"))
+          ((cl:typep handler-fn 'coalton-impl/runtime/function-entry:function-entry)
+           ;; Coalton function: curried application
+           (call-coalton-function
+            (call-coalton-function handler-fn value)
+            resume))
+          (cl:t
+           ;; Plain CL function (e.g. from run-state-step): direct call
+           (cl:funcall handler-fn value resume)))))))
 
 
 ;;;
@@ -87,10 +93,10 @@ Assumes the effect operations are:
                                 ;; Return current state
                                 (call-coalton-function
                                  resume
-                                 (cell-internal-inner state-cell)))
+                                 (coalton-library/cell::cell-internal-inner state-cell)))
                                ((cl:consp op-value)
                                 ;; Put operation: (put . new-value)
-                                (cl:setf (cell-internal-inner state-cell) (cl:cdr op-value))
+                                (cl:setf (coalton-library/cell::cell-internal-inner state-cell) (cl:cdr op-value))
                                 (call-coalton-function resume 'coalton::unit/unit))
                                (cl:t
                                 (StepFail "Unknown state operation"))))))))
@@ -216,9 +222,9 @@ Returns a tuple of (result, final-state)."
                                  ((cl:eq op-value 'get)
                                   (call-coalton-function
                                    resume
-                                   (cell-internal-inner state-cell)))
+                                   (coalton-library/cell::cell-internal-inner state-cell)))
                                  ((cl:and (cl:consp op-value) (cl:eq (cl:car op-value) 'put))
-                                  (cl:setf (cell-internal-inner state-cell) (cl:cdr op-value))
+                                  (cl:setf (coalton-library/cell::cell-internal-inner state-cell) (cl:cdr op-value))
                                   (call-coalton-function resume 'coalton::unit/unit))
                                  (cl:t
                                   (StepFail "Unknown state operation"))))))
