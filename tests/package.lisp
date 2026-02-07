@@ -50,7 +50,8 @@
    (#:m-env #:coalton-library/monad/environment)
    (#:m-stt #:coalton-library/monad/statet)
    (#:fft #:coalton-library/algorithms/fft)
-   (#:runtime #:coalton-library/effects/runtime)))
+   (#:runtime #:coalton-library/effects/runtime)
+   (#:effects #:coalton-library/effects)))
 
 (in-package #:coalton-native-tests)
 

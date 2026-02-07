@@ -115,9 +115,12 @@
                 :components ((:file "package")
                              (:file "continuations")
                              (:file "cps-stdlib")))
-               ;; NOTE: The effects library module (state, reader, writer, combinators)
-               ;; uses perform/handle syntax that requires further compiler work.
-               ;; The effects runtime system (coalton/effects-runtime) works independently.
+               (:module "effects"
+                :serial t
+                :components ((:file "package")
+                             (:file "state")
+                             (:file "reader")
+                             (:file "writer")))
                ;; Unfortunately this had to be split from the rest of the
                ;; experimental files because of intermediate dependencies.
                (:module "experimental-do-control"
@@ -389,6 +392,7 @@
                              (:file "statet")))
                (:file "async-runtime-tests")
                (:file "continuations-tests")
+               (:file "effects-library-tests")
                (:module "algorithms-tests"
                 :serial t
                 :components ((:file "fft-tests")))

@@ -9,30 +9,26 @@ This package provides common effect types and handlers:
   (:use
    #:coalton
    #:coalton-library/classes
-   #:coalton-library/functions)
+   #:coalton-library/functions
+   #:coalton-library/list)
   (:local-nicknames
    (#:cell #:coalton-library/cell))
   (:export
    ;; State effect
-   #:State
    #:get
    #:put
    #:modify
    #:run-state
    ;; Reader effect
-   #:Reader
    #:ask
    #:asks
    #:local
    #:run-reader
    ;; Writer effect
-   #:Writer
    #:tell
    #:listen
    #:pass
    #:run-writer
-   ;; Effect combinators
-   #:pure
-   #:with-effect))
+   ))
 
 (in-package #:coalton-library/effects)

@@ -502,6 +502,82 @@
         :location (source:location node))
        ctx)))
 
+  ;;
+  ;; Algebraic Effect Nodes
+  ;;
+
+  (:method ((node node-perform) ctx)
+    (declare (type algo:immutable-map ctx)
+             (values node algo:immutable-map))
+    (values
+     (make-node-perform
+      :effect (node-perform-effect node)
+      :arg (when (node-perform-arg node)
+             (rename-variables-generic% (node-perform-arg node) ctx))
+      :location (source:location node))
+     ctx))
+
+  (:method ((node node-handle-branch) ctx)
+    (declare (type algo:immutable-map ctx))
+    (values
+     (make-node-handle-branch
+      :effect (node-handle-branch-effect node)
+      :arg (node-handle-branch-arg node)
+      :resume (node-handle-branch-resume node)
+      :body (rename-variables-generic% (node-handle-branch-body node) ctx)
+      :location (source:location node))
+     ctx))
+
+  (:method ((node node-handle) ctx)
+    (declare (type algo:immutable-map ctx)
+             (values node algo:immutable-map))
+    (values
+     (make-node-handle
+      :expr (rename-variables-generic% (node-handle-expr node) ctx)
+      :branches (rename-variables-generic% (node-handle-branches node) ctx)
+      :return (when (node-handle-return node)
+                (rename-variables-generic% (node-handle-return node) ctx))
+      :return-var (node-handle-return-var node)
+      :location (source:location node))
+     ctx))
+
+  ;;
+  ;; Delimited Continuation Nodes
+  ;;
+
+  (:method ((node node-reset) ctx)
+    (declare (type algo:immutable-map ctx)
+             (values node algo:immutable-map))
+    (values
+     (make-node-reset
+      :body (rename-variables-generic% (node-reset-body node) ctx)
+      :location (source:location node))
+     ctx))
+
+  (:method ((node node-shift) ctx)
+    (declare (type algo:immutable-map ctx)
+             (values node algo:immutable-map))
+    (let* ((new-bindings (make-local-vars (list (node-variable-name (node-shift-cont-var node)))))
+           (new-ctx (algo:immutable-map-set-multiple ctx new-bindings)))
+      (values
+       (make-node-shift
+        :cont-var (rename-variables-generic% (node-shift-cont-var node) new-ctx)
+        :body (rename-variables-generic% (node-shift-body node) new-ctx)
+        :location (source:location node))
+       ctx)))
+
+  (:method ((node node-call/cc) ctx)
+    (declare (type algo:immutable-map ctx)
+             (values node algo:immutable-map))
+    (let* ((new-bindings (make-local-vars (list (node-variable-name (node-call/cc-cont-var node)))))
+           (new-ctx (algo:immutable-map-set-multiple ctx new-bindings)))
+      (values
+       (make-node-call/cc
+        :cont-var (rename-variables-generic% (node-call/cc-cont-var node) new-ctx)
+        :body (rename-variables-generic% (node-call/cc-body node) new-ctx)
+        :location (source:location node))
+       ctx)))
+
   (:method ((pattern pattern-binding) ctx)
     (declare (type algo:immutable-map ctx)
              (values pattern algo:immutable-map))

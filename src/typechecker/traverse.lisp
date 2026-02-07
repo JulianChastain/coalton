@@ -49,7 +49,10 @@
   (break              #'identity :type function :read-only t)
   (continue           #'identity :type function :read-only t)
   (do-bind            #'identity :type function :read-only t)
-  (do                 #'identity :type function :read-only t))
+  (do                 #'identity :type function :read-only t)
+  (perform            #'identity :type function :read-only t)
+  (handle-branch      #'identity :type function :read-only t)
+  (handle             #'identity :type function :read-only t))
 
 (defgeneric traverse (node block)
   (:method ((node node-variable) block)
@@ -436,6 +439,47 @@
       :location (source:location node)
       :nodes (traverse (node-do-nodes node) block)
       :last-node (traverse (node-do-last-node node) block))))
+
+  (:method ((node node-perform) block)
+    (declare (type traverse-block block)
+             (values node &optional))
+
+    (funcall
+     (traverse-perform block)
+     (make-node-perform
+      :type (node-type node)
+      :location (source:location node)
+      :effect (node-perform-effect node)
+      :arg (when (node-perform-arg node)
+             (traverse (node-perform-arg node) block)))))
+
+  (:method ((node node-handle-branch) block)
+    (declare (type traverse-block block)
+             (values node-handle-branch &optional))
+
+    (funcall
+     (traverse-handle-branch block)
+     (make-node-handle-branch
+      :effect (node-handle-branch-effect node)
+      :arg (node-handle-branch-arg node)
+      :resume (node-handle-branch-resume node)
+      :body (traverse (node-handle-branch-body node) block)
+      :location (source:location node))))
+
+  (:method ((node node-handle) block)
+    (declare (type traverse-block block)
+             (values node &optional))
+
+    (funcall
+     (traverse-handle block)
+     (make-node-handle
+      :type (node-type node)
+      :location (source:location node)
+      :expr (traverse (node-handle-expr node) block)
+      :branches (traverse (node-handle-branches node) block)
+      :return (when (node-handle-return node)
+                (traverse (node-handle-return node) block))
+      :return-var (node-handle-return-var node))))
 
   (:method ((list list) block)
     (declare (type traverse-block block)

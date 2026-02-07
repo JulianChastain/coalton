@@ -1643,7 +1643,153 @@ Returns (VALUES INFERRED-TYPE PREDICATES NODE SUBSTITUTIONS)")
             (tc-error "Type mismatch"
                       (tc-note node "Expected type '~S' but do expression has type '~S'"
                                (tc:apply-substitution subs expected-type)
-                               (tc:apply-substitution subs ty)))))))))
+                               (tc:apply-substitution subs ty))))))))
+
+  ;;
+  ;; Algebraic Effects
+  ;;
+
+  (:method ((node parser:node-perform) expected-type subs env)
+    (declare (type tc:ty expected-type)
+             (type tc:substitution-list subs)
+             (type tc-env env)
+             (values tc:ty tc:ty-predicate-list accessor-list node-perform tc:substitution-list &optional))
+
+    (let ((result-ty (tc:make-variable))
+          (preds nil)
+          (accessors nil)
+          (arg-node nil))
+
+      ;; If there's an arg expression, infer its type
+      (when (parser:node-perform-arg node)
+        (multiple-value-bind (arg-ty preds_ accessors_ arg-node_ subs_)
+            (infer-expression-type (parser:node-perform-arg node)
+                                   (tc:make-variable)
+                                   subs
+                                   env)
+          (declare (ignore arg-ty))
+          (setf preds preds_)
+          (setf accessors accessors_)
+          (setf arg-node arg-node_)
+          (setf subs subs_)))
+
+      (handler-case
+          (progn
+            (setf subs (tc:unify subs result-ty expected-type))
+            (let ((type (tc:apply-substitution subs result-ty)))
+              (values
+               type
+               preds
+               accessors
+               (make-node-perform
+                :type (tc:qualify nil type)
+                :location (source:location node)
+                :effect (parser:node-perform-effect node)
+                :arg arg-node)
+               subs)))
+        (tc:coalton-internal-type-error ()
+          (standard-expression-type-mismatch-error node subs expected-type result-ty)))))
+
+  (:method ((node parser:node-handle) expected-type subs env)
+    (declare (type tc:ty expected-type)
+             (type tc:substitution-list subs)
+             (type tc-env env)
+             (values tc:ty tc:ty-predicate-list accessor-list node-handle tc:substitution-list &optional))
+
+    (let ((preds nil)
+          (accessors nil))
+
+      ;; Infer type of the body expression
+      (multiple-value-bind (expr-ty preds_ accessors_ expr-node subs)
+          (infer-expression-type (parser:node-handle-expr node)
+                                 (tc:make-variable)
+                                 subs
+                                 env)
+        (setf preds preds_)
+        (setf accessors accessors_)
+
+        ;; Infer types of handler branch bodies
+        ;; Each branch may bind arg and resume variables in the body
+        (let ((branch-nodes
+                (loop :for branch :in (parser:node-handle-branches node)
+                      :for arg-var := (parser:node-handle-branch-arg branch)
+                      :for resume-var := (parser:node-handle-branch-resume branch)
+                      :for ty-table := (tc-env-ty-table env)
+                      :collect
+                      (progn
+                        ;; Add arg and resume vars to env for body typechecking
+                        (when arg-var
+                          (setf (gethash arg-var ty-table)
+                                (tc:to-scheme (tc:make-variable))))
+                        (when resume-var
+                          (setf (gethash resume-var ty-table)
+                                (tc:to-scheme (tc:make-function-type
+                                               (tc:make-variable)
+                                               (tc:make-variable)))))
+                        (unwind-protect
+                            (multiple-value-bind (body-ty preds_ accessors_ body-node subs_)
+                                (infer-expression-type (parser:node-handle-branch-body branch)
+                                                       (tc:make-variable)
+                                                       subs
+                                                       env)
+                              (declare (ignore body-ty))
+                              (setf subs subs_)
+                              (setf preds (append preds preds_))
+                              (setf accessors (append accessors accessors_))
+                              (make-node-handle-branch
+                               :effect (parser:node-handle-branch-effect branch)
+                               :arg arg-var
+                               :resume resume-var
+                               :body body-node
+                               :location (source:location branch)))
+                          ;; Clean up the temporary bindings even on error
+                          (when arg-var (remhash arg-var ty-table))
+                          (when resume-var (remhash resume-var ty-table)))))))
+
+          ;; Determine result type: if there's a return handler, its type; else expr-ty
+          (let ((result-ty expr-ty)
+                (return-node nil))
+
+            (when (parser:node-handle-return node)
+              (let* ((return-var (parser:node-handle-return-var node))
+                     (ty-table (tc-env-ty-table env)))
+                ;; Add return-var to env for return handler typechecking
+                (when return-var
+                  (setf (gethash return-var ty-table)
+                        (tc:to-scheme expr-ty)))
+                (unwind-protect
+                    (multiple-value-bind (ret-ty preds_ accessors_ ret-node subs_)
+                        (infer-expression-type (parser:node-handle-return node)
+                                               (tc:make-variable)
+                                               subs
+                                               env)
+                      (setf result-ty ret-ty)
+                      (setf return-node ret-node)
+                      (setf subs subs_)
+                      (setf preds (append preds preds_))
+                      (setf accessors (append accessors accessors_)))
+                  ;; Clean up the temporary binding even on error
+                  (when return-var
+                    (remhash return-var ty-table)))))
+
+            (handler-case
+                (progn
+                  (setf subs (tc:unify subs result-ty expected-type))
+                  (let ((type (tc:apply-substitution subs result-ty)))
+                    (values
+                     type
+                     preds
+                     accessors
+                     (make-node-handle
+                      :type (tc:qualify nil type)
+                      :location (source:location node)
+                      :expr expr-node
+                      :branches branch-nodes
+                      :return return-node
+                      :return-var (parser:node-handle-return-var node))
+                     subs)))
+              (tc:coalton-internal-type-error ()
+                (standard-expression-type-mismatch-error node subs expected-type result-ty)))))))))
 
 ;;;
 ;;; Pattern Type Inference

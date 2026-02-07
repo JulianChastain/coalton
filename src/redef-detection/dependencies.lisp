@@ -223,6 +223,26 @@
                  (parser:node-resume-to
                   (traverse (parser:node-resume-to-expr node) local-bindings))
 
+                 ;; Algebraic effects
+                 (parser:node-perform
+                  (when (parser:node-perform-arg node)
+                    (traverse (parser:node-perform-arg node) local-bindings)))
+
+                 (parser:node-handle
+                  (traverse (parser:node-handle-expr node) local-bindings)
+                  (dolist (branch (parser:node-handle-branches node))
+                    (let ((new-locals (alexandria:copy-hash-table local-bindings)))
+                      (when (parser:node-handle-branch-arg branch)
+                        (setf (gethash (parser:node-handle-branch-arg branch) new-locals) t))
+                      (when (parser:node-handle-branch-resume branch)
+                        (setf (gethash (parser:node-handle-branch-resume branch) new-locals) t))
+                      (traverse (parser:node-handle-branch-body branch) new-locals)))
+                  (when (parser:node-handle-return node)
+                    (let ((new-locals (alexandria:copy-hash-table local-bindings)))
+                      (when (parser:node-handle-return-var node)
+                        (setf (gethash (parser:node-handle-return-var node) new-locals) t))
+                      (traverse (parser:node-handle-return node) new-locals))))
+
                  ;; Lisp FFI - vars are explicitly listed
                  (parser:node-lisp
                   (dolist (var (parser:node-lisp-vars node))

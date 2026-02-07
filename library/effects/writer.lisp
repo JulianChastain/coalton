@@ -9,29 +9,26 @@
   ;;; Output is collected as the computation runs.
   ;;;
 
-  (declare tell (:w -> Unit ! (Writer :w)))
+  (declare tell (:w -> Unit))
   (define (tell output)
     "Append output to the accumulated output."
     (perform (writer.tell output)))
 
-  (declare listen ((Unit -> :a ! (Writer :w)) -> (Tuple :a (List :w)) ! (Writer :w)))
+  (declare listen ((Unit -> :a) -> (Tuple :a (List :w))))
   (define (listen computation)
     "Run a computation and collect its output along with the result.
 
 Returns a tuple of (result, output-list)."
-    (let ((collected (the (List :w) Nil)))
+    (let ((collected (cell:new (the (List :w) Nil))))
       (let ((result
               (handle (computation)
                 (writer.tell (w resume)
-                  ;; Collect locally
-                  (lisp Unit (w collected)
-                    (push w collected)
-                    'coalton:Unit)
+                  (cell:write! collected (Cons w (cell:read collected)))
                   (resume Unit))
                 (return (x) x))))
-        (Tuple result (reverse collected)))))
+        (Tuple result (reverse (cell:read collected))))))
 
-  (declare pass ((Unit -> (Tuple :a ((List :w) -> (List :w))) ! (Writer :w)) -> :a ! (Writer :w)))
+  (declare pass ((Unit -> (Tuple :a ((List :w) -> (List :w)))) -> :a))
   (define (pass computation)
     "Run a computation that returns a result and an output modifier.
 
@@ -42,18 +39,16 @@ The modifier is applied to the output produced by the computation."
        (map tell (modifier output))
        result)))
 
-  (declare run-writer ((Unit -> :a ! (Writer :w)) -> (Tuple :a (List :w))))
+  (declare run-writer ((Unit -> :a) -> (Tuple :a (List :w))))
   (define (run-writer computation)
     "Run a writer computation, collecting all output.
 
 Returns a tuple of (result, output-list)."
-    (let ((output (the (List :w) Nil)))
+    (let ((output (cell:new (the (List :w) Nil))))
       (let ((result
               (handle (computation)
                 (writer.tell (w resume)
-                  (lisp Unit (w output)
-                    (push w output)
-                    'coalton:Unit)
+                  (cell:write! output (Cons w (cell:read output)))
                   (resume Unit))
                 (return (x) x))))
-        (Tuple result (reverse output))))))
+        (Tuple result (reverse (cell:read output)))))))

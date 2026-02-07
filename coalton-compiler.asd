@@ -63,7 +63,8 @@
                 :serial t
                 :components ((:file "function-entry")
                              (:file "optional")
-                             (:file "package")))
+                             (:file "package")
+                             (:file "effect-support")))
                (:module "typechecker"
                 :serial t
                 :components ((:file "base")

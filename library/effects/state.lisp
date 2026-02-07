@@ -10,39 +10,34 @@
   ;;; direct style without explicit threading.
   ;;;
 
-  ;; Note: The actual effect operations are defined in the typechecker
-  ;; and compiled to CL conditions/restarts. This file provides the
-  ;; user-facing API.
-
-  (declare get (Unit -> :s ! (State :s)))
+  (declare get (Unit -> :s))
   (define (get)
     "Get the current state value."
     (perform state.get))
 
-  (declare put (:s -> Unit ! (State :s)))
+  (declare put (:s -> Unit))
   (define (put new-state)
     "Replace the current state with a new value."
     (perform (state.put new-state)))
 
-  (declare modify ((:s -> :s) -> Unit ! (State :s)))
+  (declare modify ((:s -> :s) -> Unit))
   (define (modify f)
     "Modify the state by applying a function to it."
     (let ((current (get)))
       (put (f current))))
 
-  (declare run-state (:s -> (Unit -> :a ! (State :s)) -> (Tuple :a :s)))
+  (declare run-state (:s -> (Unit -> :a) -> (Tuple :a :s)))
   (define (run-state initial-state computation)
     "Run a stateful computation with an initial state.
 
 Returns a tuple of (result, final-state)."
-    (let ((state initial-state))
-      (handle (computation)
-        (state.get (resume)
-          (resume state))
-        (state.put (new-state resume)
-          (lisp Unit (new-state state)
-            (setf state new-state)
-            'coalton:Unit)
-          (resume Unit))
-        (return (x)
-          (Tuple x state))))))
+    (let ((state (cell:new initial-state)))
+      (let ((result
+              (handle (computation)
+                (state.get (resume)
+                  (resume (cell:read state)))
+                (state.put (new-state resume)
+                  (cell:write! state new-state)
+                  (resume Unit))
+                (return (x) x))))
+        (Tuple result (cell:read state))))))

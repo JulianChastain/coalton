@@ -13,7 +13,8 @@
 
 (coalton-toplevel
   ;; Test helper functions for State effect
-  (declare state-counter-test (Unit -> (Tuple IFix IFix)))
+  ;; run-state returns (Tuple result final-state)
+  (declare state-counter-test (Unit -> (Tuple (Tuple IFix IFix) IFix)))
   (define (state-counter-test)
     "Test State effect: increment a counter three times and return the count."
     (effects:run-state 0
@@ -24,7 +25,7 @@
           (effects:put (+ (effects:get) 1))
           (Tuple initial (effects:get))))))
 
-  (declare state-modify-test (Unit -> (Tuple IFix IFix)))
+  (declare state-modify-test (Unit -> (Tuple (Tuple IFix IFix) IFix)))
   (define (state-modify-test)
     "Test State effect: use modify to update state."
     (effects:run-state 10
@@ -61,14 +62,14 @@
 (define-test test-state-counter ()
   (let ((result (state-counter-test)))
     (match result
-      ((Tuple initial final)
+      ((Tuple (Tuple initial final) _state)
        (is (== initial 0))
        (is (== final 3))))))
 
 (define-test test-state-modify ()
   (let ((result (state-modify-test)))
     (match result
-      ((Tuple before after)
+      ((Tuple (Tuple before after) _state)
        (is (== before 10))
        (is (== after 20))))))
 
@@ -85,6 +86,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (coalton-toplevel
+  ;; run-reader returns just the result (no wrapping tuple)
   (declare reader-basic-test (Unit -> IFix))
   (define (reader-basic-test)
     "Test basic Reader effect: get environment and return it."
@@ -142,6 +144,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (coalton-toplevel
+  ;; run-writer returns (Tuple result (List output))
   (declare writer-basic-test (Unit -> (Tuple IFix (List IFix))))
   (define (writer-basic-test)
     "Test basic Writer effect: tell some values and return result."
@@ -152,7 +155,7 @@
         (effects:tell 3)
         42)))
 
-  (declare writer-listen-test (Unit -> (Tuple IFix (List IFix))))
+  (declare writer-listen-test (Unit -> (Tuple UFix (List IFix))))
   (define (writer-listen-test)
     "Test Writer effect with listen function."
     (effects:run-writer
@@ -162,7 +165,7 @@
                  (fn ()
                    (effects:tell 1)
                    (effects:tell 2)
-                   10))
+                   (the UFix 10)))
           ((Tuple inner-result inner-log)
            (effects:tell 3)
            (+ inner-result (length inner-log)))))))
@@ -178,7 +181,7 @@
                    (effects:tell 100)
                    (effects:tell 200)
                    10))
-          ((Tuple inner-result inner-log)
+          ((Tuple inner-result _inner-log)
            (effects:tell 2)
            inner-result))))))
 
@@ -195,7 +198,7 @@
     (match result
       ((Tuple value log)
        ;; 10 + 2 (length of inner log)
-       (is (== value 12))
+       (is (== value (the UFix 12)))
        ;; Log should have 0, 3 (outer tells)
        (is (== (length log) 2))))))
 
@@ -206,42 +209,6 @@
        (is (== value 10))
        ;; Outer log should have 1, 2
        (is (== (length log) 2))))))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;
-;;; Effect Combinator Tests
-;;;
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-(coalton-toplevel
-  (declare pure-test (Unit -> IFix))
-  (define (pure-test)
-    "Test the pure combinator."
-    (effects:run-state 0
-      (fn ()
-        (effects:pure 42))))
-
-  (declare with-effect-test (Unit -> (Tuple IFix IFix)))
-  (define (with-effect-test)
-    "Test the with-effect combinator."
-    (effects:run-state 10
-      (fn ()
-        (let ((doubled (effects:with-effect (fn (x) (* x 2)) (effects:get))))
-          (effects:put doubled)
-          (Tuple doubled (effects:get)))))))
-
-(define-test test-pure-combinator ()
-  (match (pure-test)
-    ((Tuple result state)
-     (is (== result 42))
-     (is (== state 0)))))
-
-(define-test test-with-effect-combinator ()
-  (let ((result (with-effect-test)))
-    (match result
-      ((Tuple (Tuple doubled final) _)
-       (is (== doubled 20))
-       (is (== final 20))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;
@@ -285,7 +252,7 @@
 (define-test test-reader-writer-combined ()
   (let ((result (reader-writer-combined-test)))
     (match result
-      ((Tuple (Tuple value log) _)
+      ((Tuple value log)
        (is (== value "Result"))
        (is (== (length log) 2))))))
 
@@ -341,7 +308,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (coalton-toplevel
-  (declare state-accumulator-test (Unit -> (Tuple (List IFix) IFix)))
+  (declare state-accumulator-test (Unit -> (Tuple UFix (List IFix))))
   (define (state-accumulator-test)
     "Test State effect as an accumulator."
     (effects:run-state (the (List IFix) Nil)
@@ -374,3 +341,15 @@
       ((Tuple value state)
        (is (== value 126))  ; 42 + 42 + 42
        (is (== state 42))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; Unhandled Effect Tests
+;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; CL-level test: verify performing an effect without a handler raises an error
+(fiasco:deftest (test-unhandled-effect
+                 :in fiasco-suites::coalton-tests) ()
+  (fiasco:signals cl:simple-error
+    (coalton:coalton (effects:get Unit))))

@@ -885,6 +885,47 @@ Returns a `node'.")
                 :finally (return out-node))))))
 
   ;;
+  ;; Algebraic Effect Translations
+  ;;
+
+  (:method ((expr tc:node-perform) ctx env)
+    (declare (type pred-context ctx)
+             (type tc:environment env)
+             (values node))
+
+    (let ((qual-ty (tc:node-type expr)))
+      (assert (null (tc:qualified-ty-predicates qual-ty)))
+
+      (make-node-perform
+       :type (tc:qualified-ty-type qual-ty)
+       :effect (tc:node-perform-effect expr)
+       :arg (when (tc:node-perform-arg expr)
+              (translate-expression (tc:node-perform-arg expr) ctx env)))))
+
+  (:method ((expr tc:node-handle) ctx env)
+    (declare (type pred-context ctx)
+             (type tc:environment env)
+             (values node))
+
+    (let ((qual-ty (tc:node-type expr)))
+      (assert (null (tc:qualified-ty-predicates qual-ty)))
+
+      (make-node-handle
+       :type (tc:qualified-ty-type qual-ty)
+       :expr (translate-expression (tc:node-handle-expr expr) ctx env)
+       :branches (mapcar
+                  (lambda (branch)
+                    (make-node-handle-branch
+                     :effect (tc:node-handle-branch-effect branch)
+                     :arg (tc:node-handle-branch-arg branch)
+                     :resume (tc:node-handle-branch-resume branch)
+                     :body (translate-expression (tc:node-handle-branch-body branch) ctx env)))
+                  (tc:node-handle-branches expr))
+       :return (when (tc:node-handle-return expr)
+                 (translate-expression (tc:node-handle-return expr) ctx env))
+       :return-var (tc:node-handle-return-var expr))))
+
+  ;;
   ;; Delimited Continuation Translations
   ;;
 

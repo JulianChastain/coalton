@@ -116,6 +116,7 @@
    #:node-handle-branch                 ; STRUCT
    #:make-node-handle-branch            ; CONSTRUCTOR
    #:node-handle-branch-effect          ; ACCESSOR
+   #:node-handle-branch-arg             ; ACCESSOR
    #:node-handle-branch-resume          ; ACCESSOR
    #:node-handle-branch-body            ; ACCESSOR
    #:node-handle-branch-location        ; ACCESSOR
@@ -125,6 +126,7 @@
    #:node-handle-expr                   ; ACCESSOR
    #:node-handle-branches               ; ACCESSOR
    #:node-handle-return                 ; ACCESSOR
+   #:node-handle-return-var             ; ACCESSOR
    ;; Delimited continuation nodes
    #:node-reset                         ; STRUCT
    #:make-node-reset                    ; CONSTRUCTOR
@@ -428,9 +430,11 @@ ARG: Optional argument to the effect operation (may be nil)"
   "A branch in an effect handler.
 
 EFFECT: The effect operation being handled
+ARG: Optional variable name for the effect operation argument (or nil)
 RESUME: Variable name for the resumption function (or nil for non-resumable)
 BODY: The handler body"
   (effect   (util:required 'effect)   :type symbol           :read-only t)
+  (arg      nil                       :type (or null symbol) :read-only t)
   (resume   nil                       :type (or null symbol) :read-only t)
   (body     (util:required 'body)     :type node-body        :read-only t)
   (location (util:required 'location) :type source:location  :read-only t))
@@ -452,10 +456,12 @@ BODY: The handler body"
 
 EXPR: The expression whose effects are being handled
 BRANCHES: List of node-handle-branch for effect handlers
-RETURN: Optional handler for the final return value"
-  (expr     (util:required 'expr)     :type node                    :read-only t)
-  (branches (util:required 'branches) :type node-handle-branch-list :read-only t)
-  (return   nil                       :type (or null node-body)     :read-only t))
+RETURN: Optional handler for the final return value
+RETURN-VAR: Optional variable name for the return handler binding (or nil)"
+  (expr       (util:required 'expr)     :type node                    :read-only t)
+  (branches   (util:required 'branches) :type node-handle-branch-list :read-only t)
+  (return     nil                       :type (or null node-body)     :read-only t)
+  (return-var nil                       :type (or null symbol)        :read-only t))
 
 ;;;
 ;;; Delimited Continuation Nodes
@@ -818,6 +824,7 @@ BODY: Expression to evaluate with the captured continuation"
            (values node-handle-branch))
   (make-node-handle-branch
    :effect (node-handle-branch-effect node)
+   :arg (node-handle-branch-arg node)
    :resume (node-handle-branch-resume node)
    :body (tc:apply-substitution subs (node-handle-branch-body node))
    :location (source:location node)))
@@ -831,7 +838,8 @@ BODY: Expression to evaluate with the captured continuation"
    :expr (tc:apply-substitution subs (node-handle-expr node))
    :branches (tc:apply-substitution subs (node-handle-branches node))
    :return (when (node-handle-return node)
-             (tc:apply-substitution subs (node-handle-return node)))))
+             (tc:apply-substitution subs (node-handle-return node)))
+   :return-var (node-handle-return-var node)))
 
 ;;; Delimited Continuation apply-substitution methods
 

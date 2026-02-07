@@ -38,16 +38,6 @@
   (declare (type symbol label))
   (alexandria:format-symbol :keyword "~a-BLOCK" label))
 
-(defun effect-condition-name (effect-name)
-  "Generate the Common Lisp condition name for an effect operation.
-
-Effect operations are represented at runtime as CL conditions.
-The condition name is derived from the effect operation name."
-  (declare (type symbol effect-name))
-  ;; Use the effect name directly as the condition name
-  ;; The condition should be defined by define-effect
-  effect-name)
-
 (defgeneric codegen-expression (node env)
   (:method ((node node-literal) env)
     (declare (type tc:environment env)
@@ -327,85 +317,77 @@ The condition name is derived from the effect operation name."
   (:method ((node node-perform) env)
     "Generate code for performing an effect operation.
 
-Effect operations are compiled to Common Lisp signals with restarts:
-- SIGNAL signals the effect condition
-- The handler can INVOKE-RESTART 'RESUME to continue with a value
+Effect operations use CL conditions/restarts:
+- perform-effect signals an EFFECT-SIGNAL condition
+- A RESUME-EFFECT restart is established so the handler can resume
 
 (perform EFFECT.OP arg) compiles to:
-  (let ((result nil))
-    (signal 'effect-condition :arg arg)
-    result)
-
-The handler will set RESULT via a restart and then continue."
+  (coalton-impl/runtime::perform-effect 'EFFECT.OP arg)"
     (declare (type tc:environment env))
     (let* ((effect-name (node-perform-effect node))
-           (condition-name (effect-condition-name effect-name))
-           (result-var (gensym "EFFECT-RESULT"))
-           (arg-code (when (node-perform-arg node)
-                       (codegen-expression (node-perform-arg node) env))))
-      ;; Generate code that signals the effect
-      ;; The handler is expected to invoke the RESUME restart with the result
-      `(let ((,result-var nil))
-         (restart-case
-             (signal ',condition-name
-                     ,@(when arg-code `(:arg ,arg-code)))
-           (resume (value)
-             (setf ,result-var value)))
-         ,result-var)))
+           (arg-code (if (node-perform-arg node)
+                         (codegen-expression (node-perform-arg node) env)
+                         `',const:+value-of-unit+)))
+      `(coalton-impl/runtime::perform-effect ',effect-name ,arg-code)))
 
   (:method ((node node-handle) env)
     "Generate code for handling effect operations with resumption support.
 
-Effect handlers are compiled to Common Lisp's HANDLER-BIND + RESTART-CASE:
-- HANDLER-BIND catches signals and decides how to handle them
-- The handler can call (invoke-restart 'resume value) to continue
+Effect handlers use CL conditions/restarts:
+- handler-bind catches EFFECT-SIGNAL conditions
+- The handler checks the effect tag and invokes the RESUME-EFFECT restart
 
 (handle expr
-  (EFFECT.OP (resume) body...)
+  (EFFECT.OP (arg resume) body...)
   (return (x) return-body...))
 
 compiles to:
-  (block handle-block
-    (handler-bind
-      ((effect-condition
-        (lambda (c)
-          (let ((resume (lambda (v) (invoke-restart 'resume v))))
-            body...))))
-      (let ((result expr))
-        return-body...)))"
+  (handler-bind
+    ((coalton-impl/runtime::effect-signal
+      (lambda (c)
+        (cond
+          ((eq (effect-signal-tag c) 'EFFECT.OP)
+           (let ((arg (effect-signal-arg c))
+                 (resume (lambda (v) (invoke-restart 'resume-effect v))))
+             body...))))))
+    (let ((x expr))
+      return-body...))"
     (declare (type tc:environment env))
-    (let* ((block-label (gensym "HANDLE-BLOCK"))
-           (result-var (gensym "HANDLE-RESULT"))
-           (handlers
+    (let* ((cond-var (gensym "CONDITION"))
+           (handler-clauses
              (loop :for branch :in (node-handle-branches node)
                    :for effect-name := (node-handle-branch-effect branch)
-                   :for condition-name := (effect-condition-name effect-name)
-                   :for resume-var := (node-handle-branch-resume branch)
+                   :for arg-var := (or (node-handle-branch-arg branch) (gensym "ARG"))
+                   :for resume-var := (or (node-handle-branch-resume branch) (gensym "RESUME"))
                    :for handler-body := (codegen-expression
                                          (node-handle-branch-body branch) env)
                    :collect
-                   `(,condition-name
-                     (lambda (c)
-                       (declare (ignorable c))
-                       ,(if resume-var
-                            ;; With resumption: provide resume function
-                            `(let ((,resume-var
-                                     (lambda (value)
-                                       (invoke-restart 'resume value))))
-                               (declare (ignorable ,resume-var))
-                               ,handler-body)
-                            ;; Without resumption: just run body
-                            handler-body)))))
+                   `((eq (coalton-impl/runtime::effect-signal-tag ,cond-var)
+                         ',effect-name)
+                     (let ((,arg-var (coalton-impl/runtime::effect-signal-arg ,cond-var))
+                           (,resume-var ,(rt:construct-function-entry
+                                          `(lambda (v)
+                                             (invoke-restart
+                                              'coalton-impl/runtime::resume-effect v))
+                                          1)))
+                       (declare (ignorable ,arg-var ,resume-var))
+                       ,handler-body))))
            (expr-code (codegen-expression (node-handle-expr node) env))
-           (return-handler (node-handle-return node)))
-      `(block ,block-label
-         (handler-bind ,handlers
-           ,(if return-handler
-                ;; With return handler
-                `(let ((,result-var ,expr-code))
-                   ,(codegen-expression return-handler env))
-                ;; Without return handler
-                expr-code)))))
+           (return-handler (node-handle-return node))
+           (return-var (or (node-handle-return-var node) (gensym "RESULT")))
+           (body-code (if return-handler
+                         `(let ((,return-var ,expr-code))
+                            (declare (ignorable ,return-var))
+                            ,(codegen-expression return-handler env))
+                         expr-code)))
+      `(handler-bind
+           ((coalton-impl/runtime::effect-signal
+             (lambda (,cond-var)
+               (cond
+                 ,@handler-clauses
+                 ;; Unmatched effects pass through to outer handlers
+                 (t nil)))))
+         ,body-code)))
 
   ;;
   ;; Delimited Continuations Codegen

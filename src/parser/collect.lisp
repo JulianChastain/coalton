@@ -307,7 +307,24 @@ in expressions. May not include all bound variables."
     (declare (values node-variable-list))
     (nconc
      (mapcan #'collect-variables-generic% (node-do-nodes node))
-     (collect-variables-generic% (node-do-last-node node)))))
+     (collect-variables-generic% (node-do-last-node node))))
+
+  (:method ((node node-perform))
+    (declare (values node-variable-list &optional))
+    (when (node-perform-arg node)
+      (collect-variables-generic% (node-perform-arg node))))
+
+  (:method ((node node-handle-branch))
+    (declare (values node-variable-list &optional))
+    (collect-variables-generic% (node-handle-branch-body node)))
+
+  (:method ((node node-handle))
+    (declare (values node-variable-list))
+    (nconc
+     (collect-variables-generic% (node-handle-expr node))
+     (mapcan #'collect-variables-generic% (node-handle-branches node))
+     (when (node-handle-return node)
+       (collect-variables-generic% (node-handle-return node))))))
 
 (defun collect-referenced-classes (ty)
   "Returns a deduplicated list of all classes referenced in TY."

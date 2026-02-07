@@ -255,6 +255,28 @@
      nil
      (node-type expr)
      (typecheck-node (node-bind-body expr) env))
+    (node-type expr))
+
+  (:method ((expr node-perform) env)
+    (declare (type tc:environment env)
+             (values tc:ty))
+    (when (node-perform-arg expr)
+      (typecheck-node (node-perform-arg expr) env))
+    (node-type expr))
+
+  (:method ((expr node-handle-branch) env)
+    (declare (type tc:environment env)
+             (values tc:ty &optional))
+    (typecheck-node (node-handle-branch-body expr) env))
+
+  (:method ((expr node-handle) env)
+    (declare (type tc:environment env)
+             (values tc:ty))
+    (typecheck-node (node-handle-expr expr) env)
+    (dolist (branch (node-handle-branches expr))
+      (typecheck-node branch env))
+    (when (node-handle-return expr)
+      (typecheck-node (node-handle-return expr) env))
     (node-type expr)))
 
 

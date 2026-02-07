@@ -117,6 +117,7 @@
    #:node-handle-branch                 ; STRUCT
    #:make-node-handle-branch            ; CONSTRUCTOR
    #:node-handle-branch-effect          ; ACCESSOR
+   #:node-handle-branch-arg             ; ACCESSOR
    #:node-handle-branch-resume          ; ACCESSOR
    #:node-handle-branch-body            ; ACCESSOR
    #:node-handle-branch-location        ; ACCESSOR
@@ -126,6 +127,7 @@
    #:node-handle-expr                   ; ACCESSOR
    #:node-handle-branches               ; ACCESSOR
    #:node-handle-return                 ; ACCESSOR
+   #:node-handle-return-var             ; ACCESSOR
    ;; Delimited continuation nodes
    #:node-reset                         ; STRUCT
    #:make-node-reset                    ; CONSTRUCTOR
@@ -695,12 +697,14 @@ ARG: Optional argument to the effect operation (may be nil)"
   "A branch in an effect handler.
 
 EFFECT: The effect operation being handled
+ARG: Optional variable name for the effect operation argument (or nil)
 RESUME: Variable name for the resumption function (or nil for non-resumable)
 BODY: The handler body"
-  (effect   (util:required 'effect)   :type symbol          :read-only t)
+  (effect   (util:required 'effect)   :type symbol           :read-only t)
+  (arg      nil                       :type (or null symbol) :read-only t)
   (resume   nil                       :type (or null symbol) :read-only t)
-  (body     (util:required 'body)     :type node-body       :read-only t)
-  (location (util:required 'location) :type source:location :read-only t))
+  (body     (util:required 'body)     :type node-body        :read-only t)
+  (location (util:required 'location) :type source:location  :read-only t))
 
 (defmethod source:location ((self node-handle-branch))
   (node-handle-branch-location self))
@@ -719,10 +723,12 @@ BODY: The handler body"
 
 EXPR: The expression whose effects are being handled
 BRANCHES: List of node-handle-branch for effect handlers
-RETURN: Optional handler for the final return value"
-  (expr     (util:required 'expr)     :type node                    :read-only t)
-  (branches (util:required 'branches) :type node-handle-branch-list :read-only t)
-  (return   nil                       :type (or null node-body)     :read-only t))
+RETURN: Optional handler for the final return value
+RETURN-VAR: Optional variable name for the return handler binding (or nil)"
+  (expr       (util:required 'expr)     :type node                    :read-only t)
+  (branches   (util:required 'branches) :type node-handle-branch-list :read-only t)
+  (return     nil                       :type (or null node-body)     :read-only t)
+  (return-var nil                       :type (or null symbol)        :read-only t))
 
 ;;;
 ;;; Delimited Continuation Nodes
@@ -1000,25 +1006,29 @@ BODY: Expression to evaluate with the captured continuation"
 
      (let ((expr (parse-expression (stx-cst:stx-second form) source))
            (branches nil)
-           (return-handler nil))
+           (return-handler nil)
+           (return-var nil))
 
        ;; Parse handler branches
        (loop :for rest := (stx-cst:stx-nthrest 2 form) :then (stx-cst:stx-rest rest)
              :while (stx-cst:stx-consp rest)
              :for branch-form := (stx-cst:stx-first rest)
-             :do (multiple-value-bind (branch is-return)
+             :do (multiple-value-bind (branch is-return ret-var)
                      (parse-handle-branch branch-form source)
                    (if is-return
                        (if return-handler
                            (parse-error "Duplicate return handler"
                                         (note source branch-form "return handler already defined"))
-                           (setf return-handler branch))
+                           (progn
+                             (setf return-handler branch)
+                             (setf return-var ret-var)))
                        (push branch branches))))
 
        (make-node-handle
         :expr expr
         :branches (nreverse branches)
         :return return-handler
+        :return-var return-var
         :location (form-location source form))))
 
     ;;
@@ -1924,13 +1934,15 @@ BODY: Expression to evaluate with the captured continuation"
   "Parse a branch in a handle expression.
 
 Valid forms:
-- (EFFECT.OP (resume) body...) - effect handler with resumption
-- (EFFECT.OP body...)          - effect handler without explicit resume
-- (return (x) body...)         - return handler
+- (EFFECT.OP (resume) body...)     - effect handler with resumption
+- (EFFECT.OP (arg resume) body...) - effect handler with arg and resumption
+- (EFFECT.OP body...)              - effect handler without explicit resume
+- (return (x) body...)             - return handler with binding
+- (return body...)                 - return handler without binding
 
-Returns (VALUES branch is-return-handler-p)"
+Returns (VALUES branch is-return-handler-p return-var)"
   (declare (type stx:syntax-object form)
-           (values (or node-handle-branch node-body) boolean &optional))
+           (values (or node-handle-branch node-body) boolean (or null symbol) &optional))
 
   (when (stx-cst:stx-atom-p form)
     (parse-error "Malformed handle branch"
@@ -1959,14 +1971,14 @@ Returns (VALUES branch is-return-handler-p)"
                 (= 1 (length (stx-cst:stx-listify (stx-cst:stx-first rest))))
                 (stx-cst:stx-atom-p (stx-cst:stx-first (stx-cst:stx-first rest)))
                 (symbolp (stx:syntax-e (stx-cst:stx-first (stx-cst:stx-first rest)))))
-           ;; Has a binding variable
-           ;; For now, just parse the body - type system will handle the binding
-           (return-from parse-handle-branch
-             (values (parse-body (stx-cst:stx-rest rest) form source) t)))
+           ;; Has a binding variable — return it as the third value
+           (let ((return-var (stx:syntax-e (stx-cst:stx-first (stx-cst:stx-first rest)))))
+             (return-from parse-handle-branch
+               (values (parse-body (stx-cst:stx-rest rest) form source) t return-var))))
           ;; (return body...) - no binding
           (t
            (return-from parse-handle-branch
-             (values (parse-body rest form source) t))))))
+             (values (parse-body rest form source) t nil))))))
 
     ;; Effect handler: (EFFECT.OP (resume) body...) or (EFFECT.OP body...)
     (unless (and (stx-cst:stx-atom-p effect-part)
@@ -1976,17 +1988,31 @@ Returns (VALUES branch is-return-handler-p)"
 
     (let ((effect-name (stx:syntax-e effect-part))
           (rest (stx-cst:stx-rest form))
+          (arg-var nil)
           (resume-var nil))
 
-      ;; Check for resumption variable: (EFFECT.OP (resume) body...)
+      ;; Check for binding list: (EFFECT.OP (resume) body...) or (EFFECT.OP (arg resume) body...)
       (when (and (stx-cst:stx-consp rest)
                  (stx-cst:stx-consp (stx-cst:stx-first rest))
-                 (stx-cst:stx-proper-list-p (stx-cst:stx-first rest))
-                 (= 1 (length (stx-cst:stx-listify (stx-cst:stx-first rest))))
-                 (stx-cst:stx-atom-p (stx-cst:stx-first (stx-cst:stx-first rest)))
-                 (symbolp (stx:syntax-e (stx-cst:stx-first (stx-cst:stx-first rest)))))
-        (setf resume-var (stx:syntax-e (stx-cst:stx-first (stx-cst:stx-first rest))))
-        (setf rest (stx-cst:stx-rest rest)))
+                 (stx-cst:stx-proper-list-p (stx-cst:stx-first rest)))
+        (let* ((binding-list (stx-cst:stx-listify (stx-cst:stx-first rest)))
+               (binding-len (length binding-list)))
+          (cond
+            ;; (EFFECT.OP (resume) body...) — 1-element binding list
+            ((and (= 1 binding-len)
+                  (stx-cst:stx-atom-p (first binding-list))
+                  (symbolp (stx:syntax-e (first binding-list))))
+             (setf resume-var (stx:syntax-e (first binding-list)))
+             (setf rest (stx-cst:stx-rest rest)))
+            ;; (EFFECT.OP (arg resume) body...) — 2-element binding list
+            ((and (= 2 binding-len)
+                  (stx-cst:stx-atom-p (first binding-list))
+                  (symbolp (stx:syntax-e (first binding-list)))
+                  (stx-cst:stx-atom-p (second binding-list))
+                  (symbolp (stx:syntax-e (second binding-list))))
+             (setf arg-var (stx:syntax-e (first binding-list)))
+             (setf resume-var (stx:syntax-e (second binding-list)))
+             (setf rest (stx-cst:stx-rest rest))))))
 
       (unless (stx-cst:stx-consp rest)
         (parse-error "Malformed handle branch"
@@ -1995,6 +2021,7 @@ Returns (VALUES branch is-return-handler-p)"
       (values
        (make-node-handle-branch
         :effect effect-name
+        :arg arg-var
         :resume resume-var
         :body (parse-body rest form source)
         :location (form-location source form))

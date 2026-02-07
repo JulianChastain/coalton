@@ -123,6 +123,7 @@
    #:node-handle-branch                 ; STRUCT
    #:make-node-handle-branch            ; CONSTRUCTOR
    #:node-handle-branch-effect          ; READER
+   #:node-handle-branch-arg             ; READER
    #:node-handle-branch-resume          ; READER
    #:node-handle-branch-body            ; READER
    #:node-handle-branch-list            ; TYPE
@@ -131,6 +132,7 @@
    #:node-handle-expr                   ; READER
    #:node-handle-branches               ; READER
    #:node-handle-return                 ; READER
+   #:node-handle-return-var             ; READER
    ;; Delimited continuations
    #:node-reset                         ; STRUCT
    #:make-node-reset                    ; CONSTRUCTOR
@@ -412,11 +414,16 @@ ARG: Optional argument to the effect operation (may be nil)"
   "A branch in an effect handler.
 
 EFFECT: The effect operation being handled
+ARG: Optional variable name for the effect operation argument (or nil)
 RESUME: Variable name for the resumption function (or nil for non-resumable)
 BODY: The handler body (a node, already compiled from parser node-body)"
   (effect (util:required 'effect) :type symbol           :read-only t)
+  (arg    nil                     :type (or null symbol) :read-only t)
   (resume nil                     :type (or null symbol) :read-only t)
   (body   (util:required 'body)   :type node             :read-only t))
+
+(defmethod make-load-form ((self node-handle-branch) &optional env)
+  (make-load-form-saving-slots self :environment env))
 
 (defun node-handle-branch-list-p (x)
   (and (alexandria:proper-list-p x)
@@ -430,10 +437,18 @@ BODY: The handler body (a node, already compiled from parser node-body)"
 
 EXPR: The expression whose effects are being handled
 BRANCHES: List of node-handle-branch for effect handlers
-RETURN: Optional handler for the final return value (a node)"
-  (expr     (util:required 'expr)     :type node                    :read-only t)
-  (branches (util:required 'branches) :type node-handle-branch-list :read-only t)
-  (return   nil                       :type (or null node)          :read-only t))
+RETURN: Optional handler for the final return value (a node)
+RETURN-VAR: Optional variable name for the return handler binding (or nil)"
+  (expr       (util:required 'expr)     :type node                    :read-only t)
+  (branches   (util:required 'branches) :type node-handle-branch-list :read-only t)
+  (return     nil                       :type (or null node)          :read-only t)
+  (return-var nil                       :type (or null symbol)        :read-only t))
+
+(defmethod make-load-form ((self node-perform) &optional env)
+  (make-load-form-saving-slots self :environment env))
+
+(defmethod make-load-form ((self node-handle) &optional env)
+  (make-load-form-saving-slots self :environment env))
 
 ;;;
 ;;; Delimited Continuation AST Nodes

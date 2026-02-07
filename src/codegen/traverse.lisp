@@ -161,7 +161,31 @@ nodes."
                                   args)))
                   (node-resumable-branches node))))
 
-    
+    (action (:traverse node-perform node &rest args)
+      (make-node-perform
+       :type (node-type node)
+       :effect (node-perform-effect node)
+       :arg (when (node-perform-arg node)
+              (apply *traverse* (node-perform-arg node) args))))
+
+    (action (:traverse node-handle node &rest args)
+      (make-node-handle
+       :type (node-type node)
+       :expr (apply *traverse* (node-handle-expr node) args)
+       :branches (mapcar
+                  (lambda (branch)
+                    (make-node-handle-branch
+                     :effect (node-handle-branch-effect branch)
+                     :arg (node-handle-branch-arg branch)
+                     :resume (node-handle-branch-resume branch)
+                     :body (apply *traverse*
+                                  (node-handle-branch-body branch)
+                                  args)))
+                  (node-handle-branches node))
+       :return (when (node-handle-return node)
+                 (apply *traverse* (node-handle-return node) args))
+       :return-var (node-handle-return-var node)))
+
     (action (:traverse node-while node &rest args)
       (make-node-while
        :type (node-type node)
