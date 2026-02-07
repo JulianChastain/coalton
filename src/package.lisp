@@ -43,6 +43,7 @@
    #:likely
    #:unlikely
    #:specialize
+   #:define-syntax
    #:unable-to-codegen)
 
   ;; Early Types

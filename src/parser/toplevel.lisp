@@ -926,6 +926,47 @@ If the attribute is not unique, or a repr attribute is present, signal a parse e
                    (secondary-note source form "when parsing ~A" toplevel-form-name)))))
 
 
+;;; define-syntax: user-defined hygienic macro transformers
+
+(defun parse-define-syntax (form program source)
+  "Parse a define-syntax form and register the transformer.
+
+Form: (define-syntax (name stx-var) body...)
+
+The transformer body is CL code evaluated at parse time. The compiled
+transformer is registered in *compile-time-bindings* for immediate
+availability within the same compilation unit."
+  (declare (type stx:syntax-object form)
+           (type program program))
+  (let* ((rest (stx-cst:stx-rest form))
+         (name-form (stx-cst:stx-first rest)))
+
+    (unless (stx-cst:stx-consp name-form)
+      (parse-error "Invalid define-syntax"
+                   (note source name-form "expected (name stx-var)")))
+
+    (let* ((name (stx:syntax-e (stx-cst:stx-first name-form)))
+           (param (stx:syntax-e (stx-cst:stx-first (stx-cst:stx-rest name-form))))
+           (body-datums (mapcar #'stx:syntax->datum
+                                (stx-cst:stx-listify (stx-cst:stx-rest rest))))
+           (lambda-form `(lambda (,param) ,@body-datums))
+           (transformer (handler-case (eval lambda-form)
+                          (error (c)
+                            (parse-error "Error in define-syntax"
+                                         (note source form
+                                               (format nil "~A" c)))))))
+
+      ;; Register immediately for parse-time availability
+      (define-compile-time-value name transformer)
+
+      ;; Emit load-time registration
+      (push (make-toplevel-lisp-form
+             :body `((eval-when (:compile-toplevel :load-toplevel :execute)
+                       (coalton-impl/parser/macro:define-compile-time-value
+                        ',name ,lambda-form)))
+             :location (form-location source form))
+            (program-lisp-forms program)))))
+
 ;;; This is the parser for complete toplevel Coalton attributes,
 ;;; declarations and definitions. It selects a sub-parser by examining
 ;;; the first symbol in the form.
@@ -1059,6 +1100,11 @@ If the parsed form is an attribute (e.g., repr or monomorphize), add it to to AT
        (push spec (program-specializations program))
        t))
 
+    ((coalton:define-syntax)
+     (forbid-attributes attributes form source)
+     (parse-define-syntax form program source)
+     t)
+
     ((coalton:progn)
      (forbid-attributes attributes form source)
      (loop :for inner-form := (stx-cst:stx-rest form) :then (stx-cst:stx-rest inner-form)
@@ -1075,16 +1121,29 @@ consume all attributes")))
      t)
 
     (t
-     (cond
-       ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
-             (symbolp (stx:syntax-e (stx-cst:stx-first form)))
-             (macro-function (stx:syntax-e (stx-cst:stx-first form))))
-        (source:with-context
-            (:macro "Error occurs within macro context. Source locations may be imprecise")
-          (parse-toplevel-form (expand-macro form source) program attributes source)))
-
-       ((parse-error "Invalid toplevel form"
-                     (note source (stx-cst:stx-first form) "unknown toplevel form")))))))
+     (let* ((head-sym (and (stx-cst:stx-atom-p (stx-cst:stx-first form))
+                           (symbolp (stx:syntax-e (stx-cst:stx-first form)))
+                           (stx:syntax-e (stx-cst:stx-first form))))
+            (ct-transformer (and head-sym (gethash head-sym *compile-time-bindings*)))
+            (cl-macro (and head-sym (macro-function head-sym))))
+       (cond
+         (ct-transformer
+          (source:with-context
+              (:macro "Error occurs within macro context. Source locations may be imprecise")
+            (parse-toplevel-form
+             (expand-macro-hygienic form ct-transformer)
+             program attributes source)))
+         (cl-macro
+          (source:with-context
+              (:macro "Error occurs within macro context. Source locations may be imprecise")
+            (parse-toplevel-form
+             (if *use-hygienic-macros*
+                 (expand-macro-hygienic-wrapper form source)
+                 (expand-macro form source))
+             program attributes source)))
+         (t
+          (parse-error "Invalid toplevel form"
+                       (note source (stx-cst:stx-first form) "unknown toplevel form"))))))))
 
 
 (defun parse-define (form source)

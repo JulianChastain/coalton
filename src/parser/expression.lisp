@@ -1592,7 +1592,8 @@ BODY: Expression to evaluate with the captured continuation"
 
     ((and (stx-cst:stx-atom-p (stx-cst:stx-first form))
           (symbolp (stx:syntax-e (stx-cst:stx-first form)))
-          (macro-function (stx:syntax-e (stx-cst:stx-first form))))
+          (or (macro-function (stx:syntax-e (stx-cst:stx-first form)))
+              (gethash (stx:syntax-e (stx-cst:stx-first form)) *compile-time-bindings*)))
 
      (let ((*macro-expansion-count* (+ 1 *macro-expansion-count*)))
 
@@ -1600,13 +1601,16 @@ BODY: Expression to evaluate with the captured continuation"
          (parse-error "Invalid macro expansion"
                       (note source form "macro expansion limit hit")))
 
-       (source:with-context
-           (:macro "Error occurs within macro context. Source locations may be imprecise")
-         (parse-expression
-          (if *use-hygienic-macros*
-              (expand-macro-hygienic-wrapper form source)
-              (expand-macro form source))
-          source))))
+       (let* ((head-sym (stx:syntax-e (stx-cst:stx-first form)))
+              (ct-transformer (gethash head-sym *compile-time-bindings*)))
+         (source:with-context
+             (:macro "Error occurs within macro context. Source locations may be imprecise")
+           (parse-expression
+            (cond
+              (ct-transformer (expand-macro-hygienic form ct-transformer))
+              (*use-hygienic-macros* (expand-macro-hygienic-wrapper form source))
+              (t (expand-macro form source)))
+            source)))))
 
     ;;
     ;; Function Application

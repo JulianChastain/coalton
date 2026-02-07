@@ -33,6 +33,7 @@
    ;; Template construction
    #:syntax                               ; MACRO (quasisyntax)
    #:quasisyntax                          ; MACRO (alias)
+   #:expand-template                      ; FUNCTION
    #:syntax->list                         ; FUNCTION
 
    ;; Ellipsis utilities
@@ -328,7 +329,9 @@ Example:
   (let ((stx-var (gensym "STX"))
         (match-result (gensym "MATCH"))
         (bindings-var (gensym "BINDINGS")))
-    `(let ((,stx-var ,stx-expr))
+    `(let* ((,stx-var ,stx-expr)
+            (%syntax-case-context% ,stx-var))
+       (declare (ignorable %syntax-case-context%))
        (cond
          ,@(mapcar
             (lambda (clause)
@@ -368,7 +371,9 @@ Example:
              (stx-var (gensym "STX"))
              (match-var (gensym "MATCH"))
              (bindings-var (gensym "BINDINGS")))
-        `(let ((,stx-var ,stx-expr))
+        `(let* ((,stx-var ,stx-expr)
+                (%syntax-case-context% ,stx-var))
+           (declare (ignorable %syntax-case-context%))
            (multiple-value-bind (,match-var ,bindings-var)
                (syntax-match ',pattern ,stx-var nil)
              (unless ,match-var
@@ -384,18 +389,22 @@ Example:
 ;;;
 
 (defmacro syntax (template)
-  "Construct a syntax object from TEMPLATE.
+  "Construct a syntax object from TEMPLATE using pattern variables in scope.
 
 Pattern variables in scope are substituted. Ellipsis expands repetitions.
 This is the quasisyntax form for building hygienic macro output.
+
+Requires a lexically visible %SYNTAX-CASE-CONTEXT% variable, which is
+automatically bound by SYNTAX-CASE and WITH-SYNTAX.
 
 Example:
   (syntax-case stx ()
     ((my-let ((var val) ...) body)
      (syntax (let ((var val) ...) body))))"
-  ;; We need to capture the context at expansion time
-  ;; For now, use a simple approach that requires a context variable
-  `(expand-syntax-template ',template))
+  (let ((pvars (pattern-variables template nil)))
+    `(expand-template ',template
+                      (list ,@(mapcar (lambda (v) `(cons ',v ,v)) pvars))
+                      %syntax-case-context%)))
 
 (defmacro quasisyntax (template)
   "Alias for syntax."
@@ -412,3 +421,17 @@ Returns NIL if STX is not a list syntax."
     (let ((datum (stx:syntax-e stx)))
       (when (listp datum)
         datum))))
+
+;;;
+;;; Bridge: export syntax API from the COALTON package
+;;;
+;;; The COALTON package is defined before syntax-case.lisp loads, so we
+;;; cannot use :import-from at defpackage time. Instead we import and
+;;; re-export at load time.
+;;;
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (let ((coalton-pkg (find-package "COALTON")))
+    (when coalton-pkg
+      (import '(syntax-case with-syntax syntax quasisyntax) coalton-pkg)
+      (export '(syntax-case with-syntax syntax quasisyntax) coalton-pkg))))

@@ -11,6 +11,7 @@
    #:coalton-impl/parser/definition-context
    #:coalton-impl/parser/syntax-cst
    #:coalton-impl/parser/macro
+   #:coalton-impl/parser/syntax-case
    ;; Expression and toplevel parsing
    #:coalton-impl/parser/expression
    #:coalton-impl/parser/toplevel

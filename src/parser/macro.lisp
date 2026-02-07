@@ -149,7 +149,7 @@ SEEN-FORMS is a hash table of known forms to prevent hang on cyclical list forms
 ;;; syntax objects and using the "flip" operation during expansion.
 ;;;
 
-(defvar *use-hygienic-macros* nil
+(defvar *use-hygienic-macros* t
   "When T, use hygienic macro expansion. When NIL, use traditional expansion.
 This is a feature flag for gradual rollout.")
 
@@ -410,7 +410,7 @@ Returns a function that takes a syntax object and returns a syntax object."
   "Expand FORM hygienically using the sets-of-scopes algorithm.
 
 FORM is a syntax object representing the macro invocation.
-SOURCE is the source information context (reserved for future use).
+SOURCE is the source information context.
 
 This is the main entry point for hygienic macro expansion in the parser.
 It:
@@ -418,11 +418,15 @@ It:
 2. Expands hygienically using the flip algorithm
 3. Returns the expanded syntax object directly"
   (declare (type stx:syntax-object form)
-           (ignore source)
            (values stx:syntax-object))
-  (let* ((transformer (make-cl-macro-transformer (stx:syntax->datum form)))
-         (expanded-stx (expand-macro-hygienic form transformer)))
-    expanded-stx))
+  (handler-case
+      (let* ((transformer (make-cl-macro-transformer (stx:syntax->datum form)))
+             (expanded-stx (expand-macro-hygienic form transformer)))
+        expanded-stx)
+    (parse-error (c) (error c))
+    (error (condition)
+      (parse-error "Error during macro expansion"
+                   (note source form (princ-to-string condition))))))
 
 ;;;
 ;;; Local Expansion Control (Phase 3)

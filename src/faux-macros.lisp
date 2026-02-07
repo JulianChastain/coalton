@@ -73,6 +73,9 @@
     (generic-fun specialized-fun specialized-ty)
   "Declare a specialization for a function. (Coalton top-level operator.)")
 
+(define-coalton-toplevel-editor-macro coalton:define-syntax (name-and-param &body body)
+  "Define a hygienic macro transformer. (Coalton top-level operator.)")
+
 ;;; Attributes
 
 (define-coalton-editor-macro coalton:repr (type &optional arg)

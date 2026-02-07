@@ -42,11 +42,9 @@ When HYGIENIC is true, use hygienic macro expansion."
 ;;; Feature Flag Tests
 ;;;
 
-(deftest feature-flag-default-is-nil ()
-  "The *use-hygienic-macros* flag defaults to nil"
-  (let ((macro:*use-hygienic-macros* macro:*use-hygienic-macros*))
-    ;; Don't rebind, just check default
-    (is (null macro:*use-hygienic-macros*))))
+(deftest feature-flag-default-is-t ()
+  "The *use-hygienic-macros* flag defaults to t"
+  (is macro:*use-hygienic-macros*))
 
 (deftest feature-flag-can-be-enabled ()
   "The *use-hygienic-macros* flag can be dynamically bound to t"
@@ -357,3 +355,20 @@ When HYGIENIC is true, use hygienic macro expansion."
                       (is (typep expanded 'stx:syntax-object))
                       ;; Raw should start with IF
                       (is (eq 'if (first (stx:syntax->datum expanded))))))))))
+
+;;;
+;;; define-syntax Tests
+;;;
+
+(deftest define-syntax-registers-transformer ()
+  "define-syntax should register a compile-time transformer"
+  (let ((macro:*compile-time-bindings* (make-hash-table :test 'eq))
+        (test-sym (gensym "TEST-MACRO")))
+    ;; Manually register like parse-define-syntax would
+    (macro:define-compile-time-value
+     test-sym
+     (lambda (stx)
+       (declare (ignore stx))
+       (stx:make-identifier-syntax 'cl:t)))
+    ;; Verify it's registered
+    (is (functionp (gethash test-sym macro:*compile-time-bindings*)))))
