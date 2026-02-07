@@ -58,18 +58,27 @@
           (string (cadr form)))))))
 
 (defun call-main (pkg-name)
-  "Find and call a MAIN function in the given package, if it exists."
+  "Find and call a MAIN function in the given package, if it exists.
+Coalton zero-arg functions compile to arity-1 CL functions with an ignored
+parameter, so we pass Unit as the argument."
   (when pkg-name
     (let* ((pkg (find-package (string-upcase pkg-name)))
            (main-sym (and pkg (find-symbol "MAIN" pkg))))
       (when (and main-sym (fboundp main-sym))
-        (funcall main-sym)))))
+        (funcall main-sym 'coalton:unit)))))
+
+(defun compile-silently (source)
+  "Compile and load SOURCE, suppressing compiler chatter."
+  (let ((*standard-output* (make-broadcast-stream))
+        (*error-output* (make-broadcast-stream)))
+    (handler-bind ((warning #'muffle-warning))
+      (entry:compile source :load t))))
 
 (defun run-file (path)
   "Compile, typecheck, and execute a Coalton source file."
   (let ((source (source:make-source-file (truename path)))
         (pkg-name (extract-package-name path)))
-    (entry:compile source :load t)
+    (compile-silently source)
     (call-main pkg-name)))
 
 (defun run-stdin ()
@@ -77,7 +86,7 @@
   (let* ((text (read-stdin))
          (pkg-name (extract-package-name-from-string text))
          (source (source:make-source-string text :name "<stdin>")))
-    (entry:compile source :load t)
+    (compile-silently source)
     (call-main pkg-name)))
 
 (defun main ()
