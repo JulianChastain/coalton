@@ -81,24 +81,24 @@
   "Convert internal status symbol to FiberStatus value."
   (cl:declare (cl:optimize (cl:speed 0) (cl:safety 0) (cl:debug 3)))
   (cl:case (fiber-internal-status fiber)
-    (pending 'FiberPending)
-    (running 'FiberRunning)
-    (suspended 'FiberSuspended)
-    (done 'FiberDone)
-    (failed 'FiberFailed)
-    (interrupted 'FiberInterrupted)
-    (cl:otherwise 'FiberPending)))
+    (pending (FiberPending))
+    (running (FiberRunning))
+    (suspended (FiberSuspended))
+    (done (FiberDone))
+    (failed (FiberFailed))
+    (interrupted (FiberInterrupted))
+    (cl:otherwise (FiberPending))))
 
 (cl:defun fiber-status-to-symbol (status)
   "Convert FiberStatus value to internal status symbol."
-  (cl:case status
-    (FiberPending 'pending)
-    (FiberRunning 'running)
-    (FiberSuspended 'suspended)
-    (FiberDone 'done)
-    (FiberFailed 'failed)
-    (FiberInterrupted 'interrupted)
-    (cl:otherwise 'pending)))
+  (cl:cond
+    ((cl:typep status 'FiberStatus/FiberPending) 'pending)
+    ((cl:typep status 'FiberStatus/FiberRunning) 'running)
+    ((cl:typep status 'FiberStatus/FiberSuspended) 'suspended)
+    ((cl:typep status 'FiberStatus/FiberDone) 'done)
+    ((cl:typep status 'FiberStatus/FiberFailed) 'failed)
+    ((cl:typep status 'FiberStatus/FiberInterrupted) 'interrupted)
+    (cl:t 'pending)))
 
 
 ;;;
@@ -337,15 +337,17 @@ Returns the result indicating what happened."
 
             ;; Done: mark fiber complete
             ((StepDone value)
-             (fiber-set-result! fiber value)
-             (fiber-set-status! fiber FiberDone)
-             (FiberCompleted value))
+             (progn
+               (fiber-set-result! fiber value)
+               (fiber-set-status! fiber FiberDone)
+               (FiberCompleted value)))
 
             ;; Fail: mark fiber failed
             ((StepFail msg)
-             (fiber-set-error! fiber msg)
-             (fiber-set-status! fiber FiberFailed)
-             (FiberErrored msg))
+             (progn
+               (fiber-set-error! fiber msg)
+               (fiber-set-status! fiber FiberFailed)
+               (FiberErrored msg)))
 
             ;; Async: suspend and register callback
             ((StepAsync data)

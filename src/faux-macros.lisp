@@ -159,21 +159,21 @@
 
 ;;; Delimited Continuations
 
-(define-coalton-editor-macro coalton:reset (&body body)
+(define-coalton-editor-macro coalton:cont/reset (&body body)
   "Establish a continuation delimiter (prompt).
 
-(reset body...) delimits the extent of any shift within body.
-Continuations captured by shift will only extend up to this reset.")
+(cont/reset body...) delimits the extent of any cont/shift within body.
+Continuations captured by cont/shift will only extend up to this delimiter.")
 
-(define-coalton-editor-macro coalton:shift (k &body body)
+(define-coalton-editor-macro coalton:cont/shift (k &body body)
   "Capture the current delimited continuation.
 
-(shift k body...) captures the continuation up to the nearest enclosing reset,
-binds it to k, and evaluates body. The captured continuation k can be invoked
-zero, once, or multiple times with (k value).")
+(cont/shift k body...) captures the continuation up to the nearest enclosing
+cont/reset, binds it to k, and evaluates body. The captured continuation k
+can be invoked zero, once, or multiple times with (k value).")
 
 (define-coalton-editor-macro coalton:call/cc (k &body body)
   "Call with current continuation (non-delimited).
 
 (call/cc k body...) captures the entire current continuation and binds it to k.
-Prefer shift/reset for delimited continuations in most cases.")
+Prefer cont/shift and cont/reset for delimited continuations in most cases.")

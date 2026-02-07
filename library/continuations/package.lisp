@@ -1,4 +1,4 @@
-(defpackage #:coalton-library/continuations
+(coalton-library/utils:defstdlib-package #:coalton-library/continuations
   (:documentation "Delimited continuations for Coalton.
 
 This package provides first-class delimited continuations using shift/reset.

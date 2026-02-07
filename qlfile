@@ -3,6 +3,7 @@
 
 # Core compiler dependencies
 ql alexandria
+ql cl-cont
 ql concrete-syntax-tree
 ql float-features
 ql fset

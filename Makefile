@@ -8,14 +8,18 @@ QUICKLISP=$(SBCL) --load $(QUICKLISP_HOME)/setup.lisp \
 	--eval "(push (truename \"../\") ql:*local-project-directories*)"
 
 .PHONY: test test-release test-safe
+ASDF_LOCAL=--eval '(dolist (d (list "." "examples/thih/" "examples/quil-coalton/")) (push (truename d) asdf:*central-registry*))'
+
 test:
 	sbcl --noinform \
 		--non-interactive \
+		$(ASDF_LOCAL) \
 		--eval "(asdf:test-system :coalton)"
 
 test-safe:
 	sbcl --noinform \
 		 --non-interactive \
+		 $(ASDF_LOCAL) \
 		 --eval "(sb-ext:restrict-compiler-policy 'safety 3)" \
 		 --eval "(asdf:test-system :coalton)"
 
@@ -24,6 +28,7 @@ test-safe:
 test-release:
 	COALTON_ENV=release sbcl --noinform \
 		--non-interactive \
+		$(ASDF_LOCAL) \
 		--eval "(asdf:test-system :coalton)"
 
 .PHONY: docs

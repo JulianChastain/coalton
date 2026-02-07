@@ -1025,7 +1025,7 @@ BODY: Expression to evaluate with the captured continuation"
     ;;
 
     ((and (cst:atom (cst:first form))
-          (eq 'coalton:reset (cst:raw (cst:first form))))
+          (eq 'coalton:cont/reset (cst:raw (cst:first form))))
 
      ;; (reset)
      (unless (cst:consp (cst:rest form))
@@ -1037,7 +1037,7 @@ BODY: Expression to evaluate with the captured continuation"
       :location (form-location source form)))
 
     ((and (cst:atom (cst:first form))
-          (eq 'coalton:shift (cst:raw (cst:first form))))
+          (eq 'coalton:cont/shift (cst:raw (cst:first form))))
 
      ;; (shift)
      (unless (cst:consp (cst:rest form))

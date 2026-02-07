@@ -109,13 +109,13 @@
   (:intern
    #:%pure-effect)                      ; Internal: pure effect type
 
-  ;; Delimited Continuations
+  ;; Delimited Continuations (syntax forms)
+  ;; Uses slash-prefix (cont/reset, cont/shift) to avoid clashing with
+  ;; existing identifiers (e.g. Bits:shift, quil Reset type)
   (:export
-   #:reset                              ; Establish a continuation delimiter
-   #:shift                              ; Capture delimited continuation
-   #:call/cc                            ; Call with current continuation
-   #:Cont                               ; Continuation type
-   #:Prompt)                            ; Prompt/delimiter type marker
+   #:cont/reset                         ; Establish a continuation delimiter
+   #:cont/shift                         ; Capture delimited continuation
+   #:call/cc)                           ; Call with current continuation
 
   ;; Macros
   (:export

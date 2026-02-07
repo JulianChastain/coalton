@@ -261,51 +261,73 @@ Returns True if work was done, False if scheduler is idle."
             ;; Increment op count
             (cl:incf (scheduler-internal-op-count sched))
 
-            ;; Execute one step
+            ;; Execute one step and dispatch on result
             (cl:let ((result (fiber-step! fiber)))
-              (cl:case result
-                ;; Continue: keep going
-                (FiberContinuing cl:nil)
+              (cl:cond
+                ;; Continue: keep going (loop continues)
+                ((cl:typep result 'FiberStepResult/FiberContinuing)
+                 cl:nil)
 
                 ;; Yielded: re-queue
-                (FiberYielded
+                ((cl:typep result 'FiberStepResult/FiberYielded)
                  (cl:setf (scheduler-internal-ready-queue sched)
                           (cl:nconc (scheduler-internal-ready-queue sched) (cl:list fiber)))
                  (cl:return 'coalton::unit/unit))
 
                 ;; Completed: done with this fiber
-                ((FiberCompleted FiberErrored FiberWasInterrupted)
+                ((cl:typep result 'FiberStepResult/FiberCompleted)
+                 (cl:return 'coalton::unit/unit))
+
+                ;; Errored: done with this fiber
+                ((cl:typep result 'FiberStepResult/FiberErrored)
+                 (cl:return 'coalton::unit/unit))
+
+                ;; Interrupted: done with this fiber
+                ((cl:typep result 'FiberStepResult/FiberWasInterrupted)
                  (cl:return 'coalton::unit/unit))
 
                 ;; Suspended on async: add to suspended list
-                (FiberSuspendedAsync
+                ((cl:typep result 'FiberStepResult/FiberSuspendedAsync)
                  (cl:push fiber (scheduler-internal-suspended sched))
                  (cl:return 'coalton::unit/unit))
 
                 ;; Needs handler: try global handlers
-                (cl:otherwise
-                 (cl:when (cl:typep result '(cl:cons (cl:eql FiberNeedsHandler) cl:t))
-                   (cl:let* ((op (cl:cdr result))
-                             (tag (effect-op-internal-tag op))
-                             (entry (cl:assoc tag (scheduler-internal-global-handlers sched))))
-                     (cl:if entry
-                            ;; Found global handler - apply it
-                            (cl:let* ((handler (cl:cdr entry))
-                                      (value (effect-op-internal-value op))
-                                      (cont (fiber-internal-continuation fiber)))
-                              ;; cont is (StepPerform op k) - extract k
-                              (cl:when (cl:typep cont 'StepPerform)
-                                (cl:let ((k (cl:nth 2 cont)))
-                                  (cl:setf (fiber-internal-continuation fiber)
-                                           (call-coalton-function
-                                            (call-coalton-function handler value)
-                                            k)))))
-                            ;; No handler - fail the fiber
-                            (cl:progn
-                              (cl:setf (fiber-internal-error-msg fiber)
-                                       (cl:format cl:nil "Unhandled effect: ~A" tag))
-                              (cl:setf (fiber-internal-status fiber) 'failed)
-                              (cl:return 'coalton::unit/unit))))))))))))))
+                ((cl:typep result 'FiberStepResult/FiberNeedsHandler)
+                 (cl:let* ((op (FiberStepResult/FiberNeedsHandler-_0 result))
+                           (tag (effect-op-internal-tag op))
+                           (entry (cl:assoc tag (scheduler-internal-global-handlers sched))))
+                   (cl:if entry
+                          ;; Found global handler - apply it
+                          (cl:let* ((handler (cl:cdr entry))
+                                    (value (effect-op-internal-value op))
+                                    (cont (fiber-internal-continuation fiber)))
+                            ;; cont should be a StepPerform - extract resume fn
+                            (cl:if (cl:typep cont 'Step/StepPerform)
+                              (cl:let ((data (Step/StepPerform-_0 cont)))
+                                (cl:setf (fiber-internal-continuation fiber)
+                                         (call-coalton-function
+                                          (call-coalton-function handler value)
+                                          (cl:lambda (result)
+                                            (cl:funcall (step-perform-internal-continuation data) result)))))
+                              ;; Continuation is not StepPerform — cannot apply handler
+                              (cl:progn
+                                (cl:setf (fiber-internal-error-msg fiber)
+                                         (cl:format cl:nil "Cannot apply handler: unexpected continuation type"))
+                                (cl:setf (fiber-internal-status fiber) 'failed)
+                                (cl:return 'coalton::unit/unit))))
+                          ;; No handler - fail the fiber
+                          (cl:progn
+                            (cl:setf (fiber-internal-error-msg fiber)
+                                     (cl:format cl:nil "Unhandled effect: ~A" tag))
+                            (cl:setf (fiber-internal-status fiber) 'failed)
+                            (cl:return 'coalton::unit/unit)))))
+
+                ;; Unknown result type - fail the fiber
+                (cl:t
+                 (cl:setf (fiber-internal-error-msg fiber)
+                          (cl:format cl:nil "Unknown fiber step result: ~A" result))
+                 (cl:setf (fiber-internal-status fiber) 'failed)
+                 (cl:return 'coalton::unit/unit))))))))))
 
 
 ;;;

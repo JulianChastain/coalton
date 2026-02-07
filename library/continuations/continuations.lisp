@@ -5,6 +5,11 @@
 
 (in-package #:coalton-library/continuations)
 
+(named-readtables:in-readtable coalton:coalton)
+
+#+coalton-release
+(cl:declaim #.coalton-impl/settings:*coalton-optimize-library*)
+
 ;;;
 ;;; Cont type - represents a delimited continuation computation
 ;;;
@@ -21,7 +26,6 @@
   ;; argument is the continuation to receive the result.
   ;;
 
-  (repr :native cl-cont:funcallable/cc)
   (define-type (Cont :r :a)
     "A delimited continuation computation.
 
@@ -116,7 +120,6 @@ enclosing reset/with-prompt with the given value."
   ;; Advanced control operators
   ;;
 
-  (declare control ((:a -> (Cont :r :r)) -> (Cont :r :a)))
   (define (control f)
     "The control operator for delimited continuations.
 
@@ -129,7 +132,6 @@ If k is invoked, control returns to the capture point."
     (ContFn (fn (k)
               (run-cont (f (fn (x) (cont-pure (k x))))))))
 
-  (declare control0 ((:a -> :r) -> (Cont :r :a)))
   (define (control0 f)
     "The control0 operator - like control but with no implicit prompt.
 
@@ -137,7 +139,6 @@ If k is invoked, control returns to the capture point."
 The continuation is NOT wrapped - f receives the raw function."
     (ContFn (fn (k) (f k))))
 
-  (declare shift0 ((:a -> :r) -> (Cont :r :a)))
   (define (shift0 f)
     "The shift0 operator - like shift but with no implicit reset.
 
@@ -157,24 +158,16 @@ Unlike shift, there is no implicit reset around the captured continuation."
 continuation. Alias for cont-pure."
     (cont-pure x))
 
-  (declare reflect ((Cont :r :a) -> :a))
+  (declare reflect ((Cont :a :a) -> :a))
   (define (reflect comp)
     "Reflect a CPS computation into direct style.
 
-WARNING: This is only valid within a reset/with-prompt block!
-It converts a Cont back to a regular value by capturing the
-continuation implicitly.
+WARNING: This is only valid when the answer type matches the value type.
+It converts a Cont back to a regular value by running it with the
+identity continuation.
 
-This is implemented using shift internally."
-    ;; This is a placeholder - actual implementation needs shift
-    ;; In real use, this would be:
-    ;; (shift k (cont-bind comp (fn (x) (cont-pure (k x)))))
-    (lisp :a (comp)
-      (cl-cont:let/cc k
-        (let ((result (match comp
-                        ((ContFn f)
-                         (funcall f (lambda (x) (funcall k x)))))))
-          result))))
+For full delimited continuation support, use cont-shift and cont-reset."
+    (run-cont comp))
 
   (declare reify ((:a -> (Cont :r :a))))
   (define (reify f)
@@ -220,7 +213,6 @@ The function f receives the current continuation and can invoke it
 zero, once, or multiple times."
     (ContFn f))
 
-  (declare cont-callcc (((:a -> (Cont :r :b)) -> (Cont :r :a)) -> (Cont :r :a)))
   (define (cont-callcc f)
     "Call with current continuation in monadic style.
 

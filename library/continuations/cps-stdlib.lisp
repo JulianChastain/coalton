@@ -6,6 +6,11 @@
 
 (in-package #:coalton-library/continuations)
 
+(named-readtables:in-readtable coalton:coalton)
+
+#+coalton-release
+(cl:declaim #.coalton-impl/settings:*coalton-optimize-library*)
+
 ;;;
 ;;; CPS List Operations
 ;;;
