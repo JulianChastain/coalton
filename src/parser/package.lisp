@@ -17,4 +17,6 @@
    #:coalton-impl/parser/collect
    #:coalton-impl/parser/renamer
    #:coalton-impl/parser/binding
-   #:coalton-impl/parser/type-definition))
+   #:coalton-impl/parser/type-definition
+   ;; Shrubbery/Rhombus syntax frontend
+   #:coalton-impl/parser/shrubbery))

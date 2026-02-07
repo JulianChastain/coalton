@@ -30,5 +30,8 @@ ql spinneret
 # Optional: computable-reals for coalton/library/computable-reals
 ql computable-reals
 
+# Shrubbery/Rhombus syntax frontend
+local trapezoid :path ../trapezoid
+
 # Example dependencies (optional - uncomment if needed)
 # ql sdl2

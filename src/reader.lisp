@@ -9,7 +9,8 @@
    (#:util #:coalton-impl/util)
    (#:parser #:coalton-impl/parser)
    (#:tc #:coalton-impl/typechecker)
-   (#:entry #:coalton-impl/entry)))
+   (#:entry #:coalton-impl/entry)
+   (#:shrubbery #:coalton-impl/parser/shrubbery)))
 
 (in-package #:coalton-impl/reader)
 
@@ -214,3 +215,16 @@ It ensures the presence of source metadata for STREAM and then calls MAYBE-READ-
 
 (defmacro coalton:coalton (&rest forms)
   (compile-forms 'coalton:coalton forms))
+
+(defmacro coalton:coalton-shrubbery (text)
+  "Compile Coalton code written in shrubbery/Rhombus notation.
+TEXT is a string containing shrubbery source code.
+
+Example:
+  (coalton-shrubbery \"
+    def x = 5
+    def add(a, b): a + b
+  \")"
+  (let* ((source (coalton-impl/source:make-source-string text :name "<shrubbery>"))
+         (program (shrubbery:parse-shrubbery-toplevel text source)))
+    (entry:compile-coalton-toplevel program)))

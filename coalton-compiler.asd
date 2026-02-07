@@ -19,6 +19,7 @@
                "fset"
                "named-readtables"
                "source-error"
+               "trapezoid"
                "trivial-gray-streams")
   :pathname "src/"
   :serial t
@@ -58,6 +59,7 @@
                              (:file "renamer")
                              (:file "binding")
                              (:file "type-definition")
+                             (:file "shrubbery")
                              (:file "package")))
                (:module "runtime"
                 :serial t
