@@ -18,6 +18,7 @@
 
   (:export
    #:coalton-toplevel
+   #:coalton-shrubbery
    #:coalton-codegen
    #:coalton-codegen-ast
    #:coalton-codegen-types

@@ -13,6 +13,7 @@
                :coalton-impl/parser/hygienic-integration-tests
                :coalton/tests/parser/syntax-case-tests
                :coalton-impl/parser/parser-integration-tests
+               :coalton-impl/parser/shrubbery-tests
                :quil-coalton-tests
                :thih-coalton/fiasco-test-package)
    :interactive t))

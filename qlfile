@@ -33,5 +33,8 @@ ql computable-reals
 # Lisply backend dependencies
 ql hunchentoot
 
+# Shrubbery/Rhombus syntax frontend
+local trapezoid :path ../trapezoid
+
 # Example dependencies (optional - uncomment if needed)
 # ql sdl2
