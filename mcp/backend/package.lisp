@@ -8,7 +8,8 @@
    (#:codegen #:coalton-impl/codegen)
    (#:entry #:coalton-impl/entry)
    (#:settings #:coalton-impl/settings)
-   (#:algo #:coalton-impl/algorithm))
+   (#:algo #:coalton-impl/algorithm)
+   (#:shrubbery #:coalton-impl/parser/shrubbery))
   (:export #:start-server
            #:stop-server
            #:*server*
@@ -25,4 +26,6 @@
            #:describe-symbol
            #:macroexpand-coalton
            #:disassemble-coalton
-           #:load-coalton-file))
+           #:load-coalton-file
+           #:eval-shrubbery
+           #:translate-shrubbery))
