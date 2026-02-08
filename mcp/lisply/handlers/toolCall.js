@@ -4,23 +4,25 @@
  * Handler for tools/call requests
  */
 
-const { extractOriginalToolName } = require('../lib/config');
-const { getBackendConnectionInfo, makeHttpRequest } = require('../lib/server');
-const { sendErrorResponse, sendStandardResponse } = require('./index');
-const { handleHttpRequest } = require('./httpRequest');
-const { handleSkewedSearch } = require('./skewedSearch');
-const { handlePingLisp } = require('./ping');
-const { handleLispEval } = require('./lispEval');
-const { handleTypeOf } = require('./typeOf');
-const { handleListDefinitions } = require('./listDefinitions');
-const { handleAproposCoalton } = require('./aproposCoalton');
-const { handleResetEnvironment } = require('./resetEnvironment');
-const { handleTypeCheck } = require('./typeCheck');
-const { handleMultiEval } = require('./multiEval');
-const { handleDescribeSymbol } = require('./describeSymbol');
-const { handleMacroexpandCoalton } = require('./macroexpandCoalton');
-const { handleDisassembleCoalton } = require('./disassembleCoalton');
-const { handleLoadFile } = require('./loadFile');
+const { extractOriginalToolName } = require("../lib/config");
+const { getBackendConnectionInfo, makeHttpRequest } = require("../lib/server");
+const { sendErrorResponse, sendStandardResponse } = require("./index");
+const { handleHttpRequest } = require("./httpRequest");
+const { handleSkewedSearch } = require("./skewedSearch");
+const { handlePingLisp } = require("./ping");
+const { handleLispEval } = require("./lispEval");
+const { handleTypeOf } = require("./typeOf");
+const { handleListDefinitions } = require("./listDefinitions");
+const { handleAproposCoalton } = require("./aproposCoalton");
+const { handleResetEnvironment } = require("./resetEnvironment");
+const { handleTypeCheck } = require("./typeCheck");
+const { handleMultiEval } = require("./multiEval");
+const { handleDescribeSymbol } = require("./describeSymbol");
+const { handleMacroexpandCoalton } = require("./macroexpandCoalton");
+const { handleDisassembleCoalton } = require("./disassembleCoalton");
+const { handleLoadFile } = require("./loadFile");
+const { handleShrubberyEval } = require("./shrubberyEval");
+const { handleShrubberyTranslate } = require("./shrubberyTranslate");
 
 /**
  * Handle tool calls
@@ -37,44 +39,53 @@ function handleToolCall(request, config, logger) {
 
   try {
     switch (originalToolName) {
-      case 'lisp_eval':
+      case "lisp_eval":
         return handleLispEval(request, args, config, logger);
-      case 'http_request':
+      case "http_request":
         return handleHttpRequest(request, args, config, logger);
-      case 'ping_lisp':
+      case "ping_lisp":
         return handlePingLisp(request, config, logger);
-      case 'get_docs_list':
+      case "get_docs_list":
         return handleGetDocsList(request, config, logger);
-      case 'get_docs':
+      case "get_docs":
         return handleGetDocs(request, args, config, logger);
-      case 'skewed_search':
+      case "skewed_search":
         return handleSkewedSearch(request, args, config, logger);
-      case 'type_of':
+      case "type_of":
         return handleTypeOf(request, args, config, logger);
-      case 'list_definitions':
+      case "list_definitions":
         return handleListDefinitions(request, args, config, logger);
-      case 'apropos_coalton':
+      case "apropos_coalton":
         return handleAproposCoalton(request, args, config, logger);
-      case 'reset_environment':
+      case "reset_environment":
         return handleResetEnvironment(request, args, config, logger);
-      case 'type_check_only':
+      case "type_check_only":
         return handleTypeCheck(request, args, config, logger);
-      case 'multi_eval':
+      case "multi_eval":
         return handleMultiEval(request, args, config, logger);
-      case 'describe_symbol':
+      case "describe_symbol":
         return handleDescribeSymbol(request, args, config, logger);
-      case 'macroexpand_coalton':
+      case "macroexpand_coalton":
         return handleMacroexpandCoalton(request, args, config, logger);
-      case 'disassemble_coalton':
+      case "disassemble_coalton":
         return handleDisassembleCoalton(request, args, config, logger);
-      case 'load_file':
+      case "load_file":
         return handleLoadFile(request, args, config, logger);
+      case "shrubbery_eval":
+        return handleShrubberyEval(request, args, config, logger);
+      case "shrubbery_translate":
+        return handleShrubberyTranslate(request, args, config, logger);
       default:
         sendErrorResponse(request, -32601, `Unknown tool: ${toolName}`, logger);
     }
   } catch (error) {
     logger.error(`Tool call error: ${error.message}`);
-    sendErrorResponse(request, -32603, `Error calling tool: ${error.message}`, logger);
+    sendErrorResponse(
+      request,
+      -32603,
+      `Error calling tool: ${error.message}`,
+      logger,
+    );
   }
 }
 
@@ -82,7 +93,7 @@ function handleToolCall(request, config, logger) {
  * Handle get_docs_list tool
  */
 function handleGetDocsList(request, config, logger) {
-  logger.info('Handling get_docs_list');
+  logger.info("Handling get_docs_list");
 
   const { hostname, port } = getBackendConnectionInfo(config, logger);
 
@@ -90,29 +101,49 @@ function handleGetDocsList(request, config, logger) {
     hostname,
     port,
     path: `${config.BASE_PATH}/docs/list`,
-    method: 'GET'
+    method: "GET",
   };
 
-  makeHttpRequest(options, null, (error, response) => {
-    if (error) {
-      sendErrorResponse(request, -32603, `Error fetching docs list: ${error.message}`, logger);
-      return;
-    }
+  makeHttpRequest(
+    options,
+    null,
+    (error, response) => {
+      if (error) {
+        sendErrorResponse(
+          request,
+          -32603,
+          `Error fetching docs list: ${error.message}`,
+          logger,
+        );
+        return;
+      }
 
-    let content;
-    try {
-      content = JSON.parse(response.content);
-    } catch (e) {
-      content = response.content;
-    }
+      let content;
+      try {
+        content = JSON.parse(response.content);
+      } catch (e) {
+        content = response.content;
+      }
 
-    sendStandardResponse(request, {
-      content: [{
-        type: 'text',
-        text: typeof content === 'string' ? content : JSON.stringify(content, null, 2)
-      }]
-    }, logger);
-  }, 'GET-DOCS-LIST', logger);
+      sendStandardResponse(
+        request,
+        {
+          content: [
+            {
+              type: "text",
+              text:
+                typeof content === "string"
+                  ? content
+                  : JSON.stringify(content, null, 2),
+            },
+          ],
+        },
+        logger,
+      );
+    },
+    "GET-DOCS-LIST",
+    logger,
+  );
 }
 
 /**
@@ -124,7 +155,12 @@ function handleGetDocs(request, args, config, logger) {
   logger.info(`Handling get_docs for: ${id}`);
 
   if (!id) {
-    sendErrorResponse(request, -32602, 'Missing required parameter: id', logger);
+    sendErrorResponse(
+      request,
+      -32602,
+      "Missing required parameter: id",
+      logger,
+    );
     return;
   }
 
@@ -134,22 +170,39 @@ function handleGetDocs(request, args, config, logger) {
     hostname,
     port,
     path: `${config.BASE_PATH}/docs/${encodeURIComponent(id)}`,
-    method: 'GET'
+    method: "GET",
   };
 
-  makeHttpRequest(options, null, (error, response) => {
-    if (error) {
-      sendErrorResponse(request, -32603, `Error fetching docs: ${error.message}`, logger);
-      return;
-    }
+  makeHttpRequest(
+    options,
+    null,
+    (error, response) => {
+      if (error) {
+        sendErrorResponse(
+          request,
+          -32603,
+          `Error fetching docs: ${error.message}`,
+          logger,
+        );
+        return;
+      }
 
-    sendStandardResponse(request, {
-      content: [{
-        type: 'text',
-        text: response.content
-      }]
-    }, logger);
-  }, 'GET-DOCS', logger);
+      sendStandardResponse(
+        request,
+        {
+          content: [
+            {
+              type: "text",
+              text: response.content,
+            },
+          ],
+        },
+        logger,
+      );
+    },
+    "GET-DOCS",
+    logger,
+  );
 }
 
 module.exports = { handleToolCall };

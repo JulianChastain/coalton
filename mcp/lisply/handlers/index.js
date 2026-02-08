@@ -8,44 +8,55 @@
 
 function sendResponse(response, logger) {
   const json = JSON.stringify(response);
-  logger.debug(`Sending: ${json.substring(0, 300)}${json.length > 300 ? '...' : ''}`);
-  process.stdout.write(json + '\n');
+  logger.debug(
+    `Sending: ${json.substring(0, 300)}${json.length > 300 ? "..." : ""}`,
+  );
+  process.stdout.write(json + "\n");
 }
 
 function sendTextResponse(requestOrId, text, logger) {
-  const id = typeof requestOrId === 'object' ? requestOrId.id : requestOrId;
+  const id = typeof requestOrId === "object" ? requestOrId.id : requestOrId;
 
-  if (typeof text === 'object' && text !== null) {
+  if (typeof text === "object" && text !== null) {
     text = JSON.stringify(text, null, 2);
   }
 
-  sendResponse({
-    jsonrpc: '2.0',
-    id,
-    result: {
-      content: [{ type: 'text', text: String(text || '') }]
-    }
-  }, logger);
+  sendResponse(
+    {
+      jsonrpc: "2.0",
+      id,
+      result: {
+        content: [{ type: "text", text: String(text || "") }],
+      },
+    },
+    logger,
+  );
 }
 
 function sendStandardResponse(requestOrId, data, logger) {
-  const id = typeof requestOrId === 'object' ? requestOrId.id : requestOrId;
+  const id = typeof requestOrId === "object" ? requestOrId.id : requestOrId;
 
-  sendResponse({
-    jsonrpc: '2.0',
-    id,
-    result: data
-  }, logger);
+  sendResponse(
+    {
+      jsonrpc: "2.0",
+      id,
+      result: data,
+    },
+    logger,
+  );
 }
 
 function sendErrorResponse(requestOrId, code, message, logger) {
-  const id = typeof requestOrId === 'object' ? requestOrId.id : requestOrId;
+  const id = typeof requestOrId === "object" ? requestOrId.id : requestOrId;
 
-  sendResponse({
-    jsonrpc: '2.0',
-    id,
-    error: { code, message }
-  }, logger);
+  sendResponse(
+    {
+      jsonrpc: "2.0",
+      id,
+      error: { code, message },
+    },
+    logger,
+  );
 }
 
 // Export response utilities
@@ -53,27 +64,29 @@ module.exports = {
   sendResponse,
   sendTextResponse,
   sendStandardResponse,
-  sendErrorResponse
+  sendErrorResponse,
 };
 
 // Import and re-export handlers (after module.exports to break circular deps)
-const { handleInitialize } = require('./initialize');
-const { handleToolsList } = require('./toolsList');
-const { handleToolCall } = require('./toolCall');
-const { handleHttpRequest } = require('./httpRequest');
-const { handleSkewedSearch } = require('./skewedSearch');
-const { handlePingLisp } = require('./ping');
-const { handleLispEval } = require('./lispEval');
-const { handleTypeOf } = require('./typeOf');
-const { handleListDefinitions } = require('./listDefinitions');
-const { handleAproposCoalton } = require('./aproposCoalton');
-const { handleResetEnvironment } = require('./resetEnvironment');
-const { handleTypeCheck } = require('./typeCheck');
-const { handleMultiEval } = require('./multiEval');
-const { handleDescribeSymbol } = require('./describeSymbol');
-const { handleMacroexpandCoalton } = require('./macroexpandCoalton');
-const { handleDisassembleCoalton } = require('./disassembleCoalton');
-const { handleLoadFile } = require('./loadFile');
+const { handleInitialize } = require("./initialize");
+const { handleToolsList } = require("./toolsList");
+const { handleToolCall } = require("./toolCall");
+const { handleHttpRequest } = require("./httpRequest");
+const { handleSkewedSearch } = require("./skewedSearch");
+const { handlePingLisp } = require("./ping");
+const { handleLispEval } = require("./lispEval");
+const { handleTypeOf } = require("./typeOf");
+const { handleListDefinitions } = require("./listDefinitions");
+const { handleAproposCoalton } = require("./aproposCoalton");
+const { handleResetEnvironment } = require("./resetEnvironment");
+const { handleTypeCheck } = require("./typeCheck");
+const { handleMultiEval } = require("./multiEval");
+const { handleDescribeSymbol } = require("./describeSymbol");
+const { handleMacroexpandCoalton } = require("./macroexpandCoalton");
+const { handleDisassembleCoalton } = require("./disassembleCoalton");
+const { handleLoadFile } = require("./loadFile");
+const { handleShrubberyEval } = require("./shrubberyEval");
+const { handleShrubberyTranslate } = require("./shrubberyTranslate");
 
 module.exports.handleInitialize = handleInitialize;
 module.exports.handleToolsList = handleToolsList;
@@ -92,3 +105,5 @@ module.exports.handleDescribeSymbol = handleDescribeSymbol;
 module.exports.handleMacroexpandCoalton = handleMacroexpandCoalton;
 module.exports.handleDisassembleCoalton = handleDisassembleCoalton;
 module.exports.handleLoadFile = handleLoadFile;
+module.exports.handleShrubberyEval = handleShrubberyEval;
+module.exports.handleShrubberyTranslate = handleShrubberyTranslate;

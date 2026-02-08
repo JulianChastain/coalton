@@ -607,3 +607,97 @@
     (error (e)
       (list :success nil
             :error (format nil "[~A] ~A" (type-of e) e)))))
+
+;;;
+;;; Shrubbery/Rhombus syntax evaluation
+;;;
+
+(defun eval-shrubbery (code-string)
+  "Parse and compile shrubbery/Rhombus notation into the Coalton environment.
+   Returns a plist with :success and :result describing what was defined."
+  (handler-case
+      (let* ((*package* (find-package "COALTON-USER"))
+             (source (source:make-source-string code-string :name "mcp-shrubbery"))
+             (program (shrubbery:parse-shrubbery-toplevel code-string source)))
+        ;; Reverse lists since parse-toplevel-form pushes
+        (setf (parser:program-defines program) (nreverse (parser:program-defines program)))
+        (setf (parser:program-types program) (nreverse (parser:program-types program)))
+        (setf (parser:program-structs program) (nreverse (parser:program-structs program)))
+        (setf (parser:program-classes program) (nreverse (parser:program-classes program)))
+        (setf (parser:program-instances program) (nreverse (parser:program-instances program)))
+        (setf (parser:program-type-aliases program) (nreverse (parser:program-type-aliases program)))
+        (setf (parser:program-declares program) (nreverse (parser:program-declares program)))
+        (setf (parser:program-specializations program) (nreverse (parser:program-specializations program)))
+        ;; Compile and evaluate
+        (multiple-value-bind (compiled-code new-env)
+            (entry:entry-point program)
+          (setf entry:*global-environment* new-env)
+          (with-eval-timeout ()
+            (eval compiled-code))
+          ;; Build result description
+          (list :success t
+                :result
+                (with-output-to-string (out)
+                  (let ((first t))
+                    (dolist (def (parser:program-defines program))
+                      (let* ((name (parser:node-variable-name
+                                    (parser:toplevel-define-name def)))
+                             (type-str (let ((scheme (tc:lookup-value-type new-env name :no-error t)))
+                                         (when scheme
+                                           (tc:with-pprint-variable-context ()
+                                             (with-output-to-string (s)
+                                               (write scheme :stream s)))))))
+                        (unless first (write-string "; " out))
+                        (if type-str
+                            (format out "~A :: ~A" name type-str)
+                            (format out "Defined: ~A" name))
+                        (setf first nil)))
+                    (dolist (def (parser:program-types program))
+                      (unless first (write-string "; " out))
+                      (format out "Type defined: ~A"
+                              (parser:identifier-src-name
+                               (parser:toplevel-define-type-name def)))
+                      (setf first nil))
+                    (dolist (def (parser:program-structs program))
+                      (unless first (write-string "; " out))
+                      (format out "Struct defined: ~A"
+                              (parser:identifier-src-name
+                               (parser:toplevel-define-struct-name def)))
+                      (setf first nil))
+                    (dolist (def (parser:program-classes program))
+                      (unless first (write-string "; " out))
+                      (format out "Class defined: ~A"
+                              (parser:identifier-src-name
+                               (parser:toplevel-define-class-name def)))
+                      (setf first nil))
+                    (dolist (def (parser:program-instances program))
+                      (unless first (write-string "; " out))
+                      (format out "Instance defined: ~A"
+                              (format-instance-pred
+                               (parser:toplevel-define-instance-pred def)))
+                      (setf first nil))
+                    (dolist (def (parser:program-type-aliases program))
+                      (unless first (write-string "; " out))
+                      (format out "Type alias defined: ~A"
+                              (parser:identifier-src-name
+                               (parser:toplevel-define-type-alias-name def)))
+                      (setf first nil)))))))
+    (error (e)
+      (list :success nil
+            :error (format nil "[~A] ~A" (type-of e) e)))))
+
+(defun translate-shrubbery (code-string)
+  "Translate shrubbery/Rhombus text to Coalton S-expressions without compiling.
+   Returns a plist with :success and :result (pretty-printed S-expressions)."
+  (handler-case
+      (let* ((*package* (find-package "COALTON-USER"))
+             (sexps (shrubbery:shrubbery->coalton-sexps code-string)))
+        (list :success t
+              :result (with-output-to-string (s)
+                        (dolist (form sexps)
+                          (let ((*package* (find-package "COALTON-USER")))
+                            (pprint form s)
+                            (terpri s))))))
+    (error (e)
+      (list :success nil
+            :error (format nil "[~A] ~A" (type-of e) e)))))

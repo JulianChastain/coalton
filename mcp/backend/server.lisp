@@ -233,6 +233,40 @@
         (encode-result-plist (disassemble-coalton name)))))
 
 ;;;
+;;; Endpoint: shrubbery-eval
+;;;
+
+(defun handle-shrubbery-eval ()
+  "Handle POST /lisply/shrubbery-eval."
+  (json-content-type)
+  (let* ((json (parse-json-body))
+         (code (and json (gethash "code" json))))
+    (if (null code)
+        (with-output-to-string (s)
+          (yason:with-output (s)
+            (yason:with-object ()
+              (yason:encode-object-element "success" 'yason:false)
+              (yason:encode-object-element "error" "Missing 'code' field"))))
+        (encode-result-plist (eval-shrubbery code)))))
+
+;;;
+;;; Endpoint: shrubbery-translate
+;;;
+
+(defun handle-shrubbery-translate ()
+  "Handle POST /lisply/shrubbery-translate."
+  (json-content-type)
+  (let* ((json (parse-json-body))
+         (code (and json (gethash "code" json))))
+    (if (null code)
+        (with-output-to-string (s)
+          (yason:with-output (s)
+            (yason:with-object ()
+              (yason:encode-object-element "success" 'yason:false)
+              (yason:encode-object-element "error" "Missing 'code' field"))))
+        (encode-result-plist (translate-shrubbery code)))))
+
+;;;
 ;;; Endpoint: load-file
 ;;;
 
@@ -374,7 +408,10 @@
    (hunchentoot:create-regex-dispatcher "^/lisply/describe-symbol$" #'handle-describe-symbol)
    (hunchentoot:create-regex-dispatcher "^/lisply/macroexpand-coalton$" #'handle-macroexpand-coalton)
    (hunchentoot:create-regex-dispatcher "^/lisply/disassemble-coalton$" #'handle-disassemble-coalton)
-   (hunchentoot:create-regex-dispatcher "^/lisply/load-file$" #'handle-load-file)))
+   (hunchentoot:create-regex-dispatcher "^/lisply/load-file$" #'handle-load-file)
+   ;; Shrubbery/Rhombus syntax tools
+   (hunchentoot:create-regex-dispatcher "^/lisply/shrubbery-eval$" #'handle-shrubbery-eval)
+   (hunchentoot:create-regex-dispatcher "^/lisply/shrubbery-translate$" #'handle-shrubbery-translate)))
 
 (defun start-server (&key (port *port*))
   "Start the Lisply HTTP backend on PORT."
